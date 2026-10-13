@@ -86,6 +86,20 @@ async def call_tool(tool_name: str, args: dict) -> dict:
             return data.get("result", data)
 
 
+async def call_api(endpoint: str, body: dict | None = None) -> dict:
+    with _lock:
+        _update_last_used()
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            endpoint,
+            json=body or {},
+            timeout=aiohttp.ClientTimeout(total=55),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
 def stop() -> None:
     global _process
     with _lock:
