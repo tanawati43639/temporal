@@ -8,6 +8,12 @@ class ToolInput:
 
 
 @dataclass
+class ApiInput:
+    endpoint: str
+    body: dict = field(default_factory=dict)
+
+
+@dataclass
 class ToolOutput:
     result: dict = field(default_factory=dict)
 

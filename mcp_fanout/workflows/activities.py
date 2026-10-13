@@ -1,44 +1,26 @@
-"""MCP Activities — 3 ตัว ครบจบในแต่ละ activity
+"""MCP Activities — รวมทุกอย่างใน activity เดียว
 
-แต่ละ activity:
-  1. ensure MCP running (lazy start)
-  2. เรียก tool
-  3. return ผลลัพธ์
-
+ensure MCP running → เรียก tool/api → return ผลลัพธ์
 ไม่ต้อง pin worker, ไม่ต้อง session — ตัวไหนรับงานก็ start เอง
 """
 
 from temporalio import activity
 
 from workflows import mcp_manager
-from workflows.models import ToolInput, ToolOutput
+from workflows.models import ApiInput, ToolInput, ToolOutput
 
 
 @activity.defn
-async def fetch_customer(customer_id: str) -> ToolOutput:
+async def call_mcp_tool(input: ToolInput) -> ToolOutput:
+    """เรียก tool บน MCP server (localhost)"""
     await mcp_manager.ensure_running()
-    result = await mcp_manager.call_tool("fetch_customer", {
-        "customer_id": customer_id,
-    })
+    result = await mcp_manager.call_tool(input.tool_name, input.args)
     return ToolOutput(result=result)
 
 
 @activity.defn
-async def enrich_profile(customer_data: dict) -> ToolOutput:
+async def call_mcp_api(input: ApiInput) -> ToolOutput:
+    """เรียก API ภายนอกผ่าน MCP server"""
     await mcp_manager.ensure_running()
-    result = await mcp_manager.call_tool("enrich_profile", {
-        "customer": customer_data,
-    })
-    return ToolOutput(result=result)
-
-
-
-@activity.defn
-async def send_notification(email: str, customer_name: str) -> ToolOutput:
-    await mcp_manager.ensure_running()
-    result = await mcp_manager.call_tool("send_notification", {
-        "email": email,
-        "subject": f"Profile updated: {customer_name}",
-        "body": f"Hi {customer_name}, your profile has been enriched.",
-    })
+    result = await mcp_manager.call_api(input.endpoint, input.body)
     return ToolOutput(result=result)
