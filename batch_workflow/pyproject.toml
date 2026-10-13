@@ -1,0 +1,23 @@
+[project]
+name = "automation"
+version = "0.1.0"
+description = "Temporal automation platform — processes (workflows) + objects (activities), Blue Prism-style layout"
+requires-python = ">=3.10"
+dependencies = ["temporalio>=1.34.0", "psutil>=5.9", "prometheus-client>=0.20"]
+
+[project.optional-dependencies]
+# Enable with: uv sync --extra otel   (then run with TEMPORAL_OTEL=1)
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+]
+# Real Azure Key Vault / SharePoint (Graph). Dev mode falls back to env vars.
+azure = [
+    "azure-identity>=1.15",
+    "azure-keyvault-secrets>=4.7",
+]
+# Custom web UI: uv sync --extra web
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose *)",
+      "Bash(az version *)",
+      "Bash(az account *)",
+      "Bash(az keyvault *)",
+      "Bash(az role *)"
+    ]
+  }
+}
