@@ -13,6 +13,7 @@ from temporalio.worker import Worker
 
 from workflows.activities import call_mcp_api, call_mcp_tool
 from workflows.child_workflow import ProcessCustomerWorkflow
+from workflows.department_workflow import DepartmentWorkflow
 from workflows.parent_workflow import FanoutWorkflow
 
 
@@ -26,7 +27,7 @@ async def run_worker(identity: str) -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[FanoutWorkflow, ProcessCustomerWorkflow],
+        workflows=[FanoutWorkflow, DepartmentWorkflow, ProcessCustomerWorkflow],
         activities=[call_mcp_tool, call_mcp_api],
     )
 
