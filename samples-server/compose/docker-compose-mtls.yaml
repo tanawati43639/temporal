@@ -1,0 +1,359 @@
+# ──────────────────────────────────────────────────────────────────
+# Multi-role Temporal + mTLS everywhere.
+#
+# Three Temporal services (frontend / history / matching) each in its own
+# container, communicating over mTLS using a shared "cluster" cert. The
+# frontend's external gRPC port :7233 also requires mTLS, so clients
+# (temporal-ui, admin-tools, SDKs) must present a client cert signed by the
+# same CA.
+#
+# The internal `worker` service is intentionally omitted — it would hit the
+# frontend over gRPC with no auth header and the default authorizer would
+# reject it. User-written Workers (via SDK) are unaffected; only Temporal's
+# own system workflows (scanner, archival) stop running — acceptable for a POC.
+#
+# No external authz (Azure JWT) is wired here. The security boundary is the
+# client cert alone: anyone with a cert signed by this CA can call any API.
+# For namespace-level RBAC, layer Azure OIDC on top later.
+#
+# Bootstrap:
+#   ./tls/run-mtls.sh                       # one-time: build + run PKI generator
+#   docker compose -f docker-compose-mtls.yaml up -d
+# ──────────────────────────────────────────────────────────────────
+services:
+  postgresql:
+    image: postgres:${POSTGRESQL_VERSION}
+    container_name: temporal-postgresql
+    environment:
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+    networks:
+      - temporal-network
+    volumes:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  elasticsearch:
+    image: elasticsearch:${ELASTICSEARCH_VERSION}
+    container_name: temporal-elasticsearch
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    networks:
+      - temporal-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  # Schema migrations — DB-direct, no TLS to Temporal frontend needed.
+  temporal-setup:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-setup
+    restart: on-failure:6
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - SQL_PASSWORD=temporal
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - ES_SCHEME=http
+      - ES_VERSION=v7
+      - ES_VISIBILITY_INDEX=temporal_visibility_v1_dev
+    networks:
+      - temporal-network
+    volumes:
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh"]
+    command: /scripts/setup-postgres-es.sh
+
+  # ─── Temporal services ────────────────────────────────────────────
+  # Each service shares:
+  #   - the cluster cert for internode mTLS (both server and client auth)
+  #   - the frontend cert for its own external gRPC port when it IS the
+  #     frontend (unused by history/matching but set uniformly for simplicity)
+  #   - a single CA that signs everything the server trusts
+
+  temporal-history:
+    image: temporalio/server:${TEMPORAL_VERSION}
+    container_name: temporal-history
+    depends_on:
+      temporal-setup:
+        condition: service_completed_successfully
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+      - BIND_ON_IP=0.0.0.0
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8000
+      # --- Internode mTLS (cluster cert, both directions) ---
+      - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
+      - TEMPORAL_TLS_SERVER_KEY=/pki/cluster-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_REQUIRE_CLIENT_AUTH=true
+      - TEMPORAL_TLS_INTERNODE_SERVER_NAME=temporal-cluster
+      # --- Frontend TLS (used by the frontend service only; unused here but
+      #     kept uniform so the config template renders the same way) ---
+      - TEMPORAL_TLS_FRONTEND_CERT=/pki/frontend.pem
+      - TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
+      - TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    networks:
+      - temporal-network
+    # Override the upstream entrypoint — it hardcodes `exec temporal-server
+    # start` with no `--service` flag, which would start all four services
+    # in every container. Inline the same BIND_ON_IP setup, then start just
+    # the history service.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        : "$${BIND_ON_IP:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+        export BIND_ON_IP
+        if [ "$${BIND_ON_IP}" = "0.0.0.0" ] || [ "$${BIND_ON_IP}" = "::0" ]; then
+          : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+          export TEMPORAL_BROADCAST_ADDRESS
+        fi
+        exec temporal-server start --service=history
+
+  temporal-matching:
+    image: temporalio/server:${TEMPORAL_VERSION}
+    container_name: temporal-matching
+    depends_on:
+      - temporal-history
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+      - BIND_ON_IP=0.0.0.0
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8001
+      - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
+      - TEMPORAL_TLS_SERVER_KEY=/pki/cluster-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_REQUIRE_CLIENT_AUTH=true
+      - TEMPORAL_TLS_INTERNODE_SERVER_NAME=temporal-cluster
+      - TEMPORAL_TLS_FRONTEND_CERT=/pki/frontend.pem
+      - TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
+      - TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    networks:
+      - temporal-network
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        : "$${BIND_ON_IP:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+        export BIND_ON_IP
+        if [ "$${BIND_ON_IP}" = "0.0.0.0" ] || [ "$${BIND_ON_IP}" = "::0" ]; then
+          : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+          export TEMPORAL_BROADCAST_ADDRESS
+        fi
+        exec temporal-server start --service=matching
+
+  temporal-frontend:
+    image: temporalio/server:${TEMPORAL_VERSION}
+    container_name: temporal-frontend
+    depends_on:
+      - temporal-matching
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+      - BIND_ON_IP=0.0.0.0
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8002
+      - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
+      - TEMPORAL_TLS_SERVER_KEY=/pki/cluster-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_REQUIRE_CLIENT_AUTH=true
+      - TEMPORAL_TLS_INTERNODE_SERVER_NAME=temporal-cluster
+      - TEMPORAL_TLS_FRONTEND_CERT=/pki/frontend.pem
+      - TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
+      - TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
+      # Server-side RBAC was attempted and reverted. The qa-user (non-guest,
+      # with `uat:reader` role) produced a token containing the correct
+      # `roles` claim — verified via jwt.ms — but the default authorizer
+      # treats `ListNamespaces` as a cluster-scoped API that requires a
+      # `system:*` role, so a namespace-only user can't even load the UI
+      # (the UI calls ListNamespaces first thing). Working around this
+      # needs either `system:reader` for everyone (loses isolation) or a
+      # custom Go authorizer that filters ListNamespaces. See project
+      # memory [[project-temporal-rbac]] for the full timeline.
+      # - TEMPORAL_AUTH_AUTHORIZER=default
+      # - TEMPORAL_AUTH_CLAIM_MAPPER=default
+      # - TEMPORAL_JWT_PERMISSIONS_CLAIM=roles
+      # - TEMPORAL_JWT_KEY_REFRESH=1h
+    ports:
+      - "7233:7233"
+      - "8002:8002"
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    networks:
+      - temporal-network
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        : "$${BIND_ON_IP:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+        export BIND_ON_IP
+        if [ "$${BIND_ON_IP}" = "0.0.0.0" ] || [ "$${BIND_ON_IP}" = "::0" ]; then
+          : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+          export TEMPORAL_BROADCAST_ADDRESS
+        fi
+        exec temporal-server start --service=frontend
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
+
+  # ─── Namespace creation ──────────────────────────────────────────
+  # Uses the client cert to speak TLS to the frontend. Namespaces persist
+  # in postgres so this only needs to succeed once.
+  temporal-create-namespace:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-create-namespace
+    restart: on-failure:5
+    depends_on:
+      temporal-frontend:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal-frontend:7233
+      - NAMESPACES=default,dev,uat,prod
+      # Temporal CLI env vars — note the `_CLIENT_` and `_PATH` suffixes;
+      # these differ from the server-side `TEMPORAL_TLS_SERVER_*` vars above.
+      - TEMPORAL_TLS=true
+      - TEMPORAL_TLS_CLIENT_CERT_PATH=/pki/client.pem
+      - TEMPORAL_TLS_CLIENT_KEY_PATH=/pki/client-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT_PATH=/pki/ca.pem
+      - TEMPORAL_TLS_SERVER_NAME=temporal-frontend
+    networks:
+      - temporal-network
+    volumes:
+      - ./scripts:/scripts
+      - temporal_mtls_pki:/pki:ro
+    entrypoint: ["/bin/sh"]
+    command: /scripts/create-namespace.sh
+
+  # ─── Admin tools (interactive shell) ─────────────────────────────
+  # `docker exec -it temporal-admin-tools temporal operator ...` just works —
+  # the TLS flags are already baked in via env vars.
+  temporal-admin-tools:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-admin-tools
+    depends_on:
+      temporal-frontend:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal-frontend:7233
+      - TEMPORAL_CLI_ADDRESS=temporal-frontend:7233
+      - TEMPORAL_TLS=true
+      - TEMPORAL_TLS_CLIENT_CERT_PATH=/pki/client.pem
+      - TEMPORAL_TLS_CLIENT_KEY_PATH=/pki/client-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT_PATH=/pki/ca.pem
+      - TEMPORAL_TLS_SERVER_NAME=temporal-frontend
+    networks:
+      - temporal-network
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+    stdin_open: true
+    tty: true
+
+  # ─── UI (TLS to backend, plain HTTP to browser) ──────────────────
+  # The UI terminates TLS to the Temporal frontend using the shared client
+  # cert. Browsers still talk plain HTTP to the UI on :8080 — add a reverse
+  # proxy for TLS termination to the browser if that matters.
+  temporal-ui:
+    image: temporalio/ui:${TEMPORAL_UI_VERSION}
+    container_name: temporal-ui
+    depends_on:
+      temporal-frontend:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal-frontend:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+      # UI → Temporal frontend over mTLS. The UI's config.yaml reads these
+      # unsuffixed var names (NOT the `_PATH` form the Temporal CLI uses).
+      - TEMPORAL_TLS_CERT=/pki/client.pem
+      - TEMPORAL_TLS_KEY=/pki/client-key.pem
+      - TEMPORAL_TLS_CA=/pki/ca.pem
+      - TEMPORAL_TLS_SERVER_NAME=temporal-frontend
+      - TEMPORAL_TLS_ENABLE_HOST_VERIFICATION=true
+      # --- Azure (Entra ID) OIDC login ---
+      # Forces users to sign in before they can see any UI page. The token
+      # is also attached as an Authorization-Extras Bearer header on gRPC
+      # calls to the frontend, but the server has no authorizer configured,
+      # so the token is validated by the UI only and ignored by the server.
+      - TEMPORAL_AUTH_ENABLED=true
+      - TEMPORAL_AUTH_TYPE=oidc
+      - TEMPORAL_AUTH_LABEL=Azure AD
+      - TEMPORAL_AUTH_CALLBACK_URL=http://localhost:8080/auth/sso/callback
+      - TEMPORAL_AUTH_SCOPES=openid,profile,email
+      - TEMPORAL_AUTH_USE_ID_TOKEN_AS_BEARER=true
+    # Tenant-specific values (PROVIDER_URL, CLIENT_ID, CLIENT_SECRET) and the
+    # JWKS URI live in .env.local — git-ignored, not committed.
+    env_file:
+      - .env.local
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+    networks:
+      - temporal-network
+    ports:
+      - 8080:8080
+
+networks:
+  temporal-network:
+    driver: bridge
+    name: temporal-network
+
+volumes:
+  # External so the PKI generator (tls/Dockerfile.mtls) can populate it once
+  # and every service can read it. Created by ./tls/run-mtls.sh.
+  temporal_mtls_pki:
+    external: true

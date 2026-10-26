@@ -1,0 +1,202 @@
+services:
+  postgresql:
+    image: postgres:${POSTGRESQL_VERSION}
+    container_name: temporal-postgresql
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+    networks:
+      - temporal-network
+    volumes:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  elasticsearch:
+    image: elasticsearch:${ELASTICSEARCH_VERSION}
+    container_name: temporal-elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    networks:
+      - temporal-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  temporal-admin-tools:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-admin-tools
+    restart: on-failure:6
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - SQL_PASSWORD=temporal
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - ES_SCHEME=http
+      - ES_VERSION=v7
+      - ES_VISIBILITY_INDEX=temporal_visibility_v1_dev
+    networks:
+      - temporal-network
+    volumes:
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh"]
+    command: /scripts/setup-postgres-es.sh
+
+  temporal:
+    image: temporalio/server:${TEMPORAL_VERSION}
+    container_name: temporal
+    depends_on:
+      temporal-admin-tools:
+        condition: service_completed_successfully
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+      - BIND_ON_IP=0.0.0.0
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8000
+      # --- Authorization (Azure AD / Entra ID JWT) ---
+      # DISABLED: single-container temporalio/server bundles frontend+history+
+      # matching+worker; internal gRPC calls (e.g. system worker starting
+      # scanner workflows) carry NO Bearer token, so the default authorizer
+      # rejects them and the server crashes with "Request unauthorized."
+      # To enable namespace-level RBAC, switch to docker-compose-multirole.yaml
+      # with mTLS between services (and map internal certs to admin claim),
+      # OR write a custom ClaimMapper plugin that grants admin to no-token calls.
+      # - TEMPORAL_AUTH_AUTHORIZER=default
+      # - TEMPORAL_AUTH_CLAIM_MAPPER=default
+      # - TEMPORAL_JWT_PERMISSIONS_CLAIM=roles
+      # - TEMPORAL_JWT_KEY_REFRESH=1h
+      # TEMPORAL_JWT_KEY_SOURCE1 is still loaded from .env.local — harmless when
+      # authorizer is off (no JWTs are validated), but ready for when it's on.
+    # Tenant-specific values (JWKS URI, etc.) — git-ignored
+    env_file:
+      - .env.local
+    networks:
+      - temporal-network
+    ports:
+      - '7233:7233'
+      - '8000:8000'
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
+
+  temporal-create-namespace:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-create-namespace
+    restart: on-failure:5
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - NAMESPACES=default,dev,uat,prod
+    networks:
+      - temporal-network
+    volumes:
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh"]
+    command: /scripts/create-namespace.sh
+
+  temporal-ui:
+    container_name: temporal-ui
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+      # --- Azure (Entra ID) OIDC login ---
+      - TEMPORAL_AUTH_ENABLED=true
+      - TEMPORAL_AUTH_TYPE=oidc
+      - TEMPORAL_AUTH_LABEL=Azure AD
+      - TEMPORAL_AUTH_CALLBACK_URL=http://localhost:8080/auth/sso/callback
+      - TEMPORAL_AUTH_SCOPES=openid,profile,email
+      # Azure's access_token is usually not a JWT the UI can validate, so use the ID token.
+      # The UI attaches this as a Bearer token on every gRPC call to the server,
+      # where the server's Authorizer + ClaimMapper validate it.
+      - TEMPORAL_AUTH_USE_ID_TOKEN_AS_BEARER=true
+      # Audience for token validation (must match the App Registration's client ID).
+      # This is set in .env.local via TEMPORAL_AUTH_CLIENT_ID.
+    # Secrets / tenant-specific values live here (git-ignored), not in the tracked .env
+    env_file:
+      - .env.local
+    image: temporalio/ui:${TEMPORAL_UI_VERSION}
+    networks:
+      - temporal-network
+    ports:
+      - 8080:8080
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    container_name: temporal-prometheus
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - temporal-network
+    ports:
+      - 9090:9090
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./deployment/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    container_name: temporal-grafana
+    depends_on:
+      - prometheus
+    environment:
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    networks:
+      - temporal-network
+    ports:
+      - 8085:3000
+    volumes:
+      - ./deployment/grafana/provisioning-single/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deployment/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deployment/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+networks:
+  temporal-network:
+    driver: bridge
+    name: temporal-network

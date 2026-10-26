@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1.3-labs
+#
+# Generates a self-signed PKI for Temporal multi-role + mTLS:
+#   - ca.pem / ca-key.pem           — the root CA
+#   - cluster.pem / cluster-key.pem — internode cert, shared by every Temporal
+#                                     service (frontend/history/matching), with
+#                                     both server-auth and client-auth usage
+#   - frontend.pem / frontend-key.pem — external gRPC server cert on :7233
+#   - client.pem / client-key.pem   — cert for every external caller
+#                                     (temporal-ui, admin-tools, SDK clients)
+#
+# Output volumes:
+#   /pki       — mounted into every service that needs certs at runtime
+#   /pki-out   — host-side copy of the CA so SDK clients outside Docker can
+#                validate the server's cert
+#
+# All certs expire in 5 years (43800h) — dev/POC lifetime, not production.
+FROM golang
+
+RUN go install github.com/cloudflare/cfssl/cmd/cfssl@latest
+RUN go install github.com/cloudflare/cfssl/cmd/cfssljson@latest
+
+VOLUME ["/pki"]
+WORKDIR /pki
+VOLUME ["/pki-out"]
+
+RUN <<EOF
+    set -e
+
+    # 1) Root CA
+    echo '{"CN":"temporal-ca","key":{"algo":"rsa","size":2048}}' \
+      | cfssl gencert -initca - | cfssljson -bare ca -
+
+    # 2) Signing profile — includes BOTH "server auth" and "client auth" so
+    #    the cluster cert can be presented in either direction during mTLS.
+    cat > ca-config.json <<'JSON'
+    {
+      "signing": {
+        "default": {
+          "expiry": "43800h",
+          "usages": ["signing", "key encipherment", "server auth", "client auth"]
+        }
+      }
+    }
+JSON
+
+    # 3) Internode cert — one cert, every service uses it. Hostnames list every
+    #    service's container name so TLS peer verification passes regardless of
+    #    which service dials which.
+    echo '{"CN":"temporal-cluster","hosts":[""],"key":{"algo":"rsa","size":2048}}' \
+      | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem \
+          -hostname="temporal-cluster,temporal-frontend,temporal-history,temporal-matching,temporal,localhost,127.0.0.1" - \
+      | cfssljson -bare cluster
+
+    # 4) External frontend cert — what browsers/SDKs see on :7233. localhost +
+    #    127.0.0.1 so you can hit it from the host; temporal-frontend for in-network.
+    echo '{"CN":"temporal-frontend","hosts":[""],"key":{"algo":"rsa","size":2048}}' \
+      | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem \
+          -hostname="temporal-frontend,temporal,localhost,127.0.0.1" - \
+      | cfssljson -bare frontend
+
+    # 5) External client cert — temporal-ui, admin-tools, SDKs. CN doubles as
+    #    the identity string if we ever add cert-based authz later.
+    echo '{"CN":"temporal-client","hosts":[""],"key":{"algo":"rsa","size":2048}}' \
+      | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem \
+          -hostname="temporal-client" - \
+      | cfssljson -bare client
+
+    # 644 for everything — the Temporal container runs as a non-root user,
+    # and 640 locks it out of the private keys. Fine for a dev PKI.
+    chmod 644 *.pem
+EOF
+
+ENTRYPOINT ["/bin/sh", "-c", "cp /pki/ca.pem /pki/client.pem /pki/client-key.pem /pki-out/"]
