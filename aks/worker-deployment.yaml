@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker-api
+  namespace: temporal
+  labels:
+    app: temporal-worker-api
+spec:
+  # step นี้เน้น scale ภายใน pod → replicas คงที่ไว้ก่อน (HPA/KEDA เป็น step ถัดไป)
+  replicas: 2
+  selector:
+    matchLabels:
+      app: temporal-worker-api
+  template:
+    metadata:
+      labels:
+        app: temporal-worker-api
+    spec:
+      # ต้องมากกว่า GRACEFUL_SHUTDOWN_SECONDS เพื่อให้ worker drain งานค้างได้ทัน
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: worker
+          image: acrtemporal.azurecr.io/temporal-worker:v1
+          imagePullPolicy: IfNotPresent
+          env:
+            # ---- connection ----
+            - name: TEMPORAL_ADDRESS
+              value: "temporal-frontend.temporal.svc:7233"
+            - name: TEMPORAL_NAMESPACE
+              value: "default"
+            - name: TEMPORAL_TASK_QUEUE
+              value: "api-tasks"
+
+            # ---- concurrency: หัวใจของ "scale ภายใน pod" ----
+            # งาน API-only (I/O-bound) → ตั้ง activities สูงได้ เพราะรอ I/O ไม่กิน CPU
+            - name: MAX_CONCURRENT_ACTIVITIES
+              value: "100"
+            - name: MAX_CONCURRENT_WORKFLOW_TASKS
+              value: "50"
+            - name: MAX_CONCURRENT_LOCAL_ACTIVITIES
+              value: "50"
+            - name: MAX_ACTIVITY_TASK_POLLS
+              value: "5"
+            - name: MAX_WORKFLOW_TASK_POLLS
+              value: "5"
+            - name: MAX_CACHED_WORKFLOWS
+              value: "1000"
+            # กันยิง API ปลายทางแรงเกิน (0 = ไม่จำกัด)
+            - name: MAX_ACTIVITIES_PER_SECOND
+              value: "0"
+            - name: GRACEFUL_SHUTDOWN_SECONDS
+              value: "30"
+            - name: LOG_LEVEL
+              value: "INFO"
+
+          # resource ต้องสัมพันธ์กับ concurrency:
+          # ยิ่งตั้ง MAX_CONCURRENT_ACTIVITIES สูง ยิ่งต้องมี memory รองรับ
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
