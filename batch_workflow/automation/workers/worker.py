@@ -20,6 +20,7 @@ from automation.objects.items.activities import process_item
 from automation.objects.sharepoint.activities import SharePointObject, build_graph_client
 from automation.processes.batch.parent import BatchParentWorkflow
 from automation.processes.batch.process_batch import ProcessBatchWorkflow
+from automation.processes.batch_controllable.parent import ControllableBatchParentWorkflow
 from automation.processes.notify.notify_workflow import NotifyWorkflow
 from automation.workers.metrics_exporter import start_metrics_exporter
 
@@ -81,7 +82,12 @@ async def run_worker(
     worker = Worker(
         client,
         task_queue=BATCH_QUEUE,
-        workflows=[BatchParentWorkflow, ProcessBatchWorkflow, NotifyWorkflow],
+        workflows=[
+            BatchParentWorkflow,
+            ControllableBatchParentWorkflow,
+            ProcessBatchWorkflow,
+            NotifyWorkflow,
+        ],
         activities=[process_item, send_email, sharepoint.upload_file],
         max_concurrent_activities=50,
         interceptors=interceptors,
