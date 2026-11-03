@@ -6,8 +6,8 @@ metadata:
   labels:
     app: temporal-worker-api
 spec:
-  # step นี้เน้น scale ภายใน pod → replicas คงที่ไว้ก่อน (HPA/KEDA เป็น step ถัดไป)
-  replicas: 2
+  # POC: deploy worker 1 ตัวก่อน (scale/HPA/KEDA เป็น step ถัดไป)
+  replicas: 1
   selector:
     matchLabels:
       app: temporal-worker-api
@@ -20,7 +20,7 @@ spec:
       terminationGracePeriodSeconds: 45
       containers:
         - name: worker
-          image: acrtemporal.azurecr.io/temporal-worker:v1
+          image: acrtemporal25243.azurecr.io/temporal-worker:v1
           imagePullPolicy: IfNotPresent
           env:
             # ---- connection ----
