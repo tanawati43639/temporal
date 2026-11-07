@@ -21,7 +21,7 @@ stack gave the same history/state numbers; only the visibility store differs.)
 | Outcome | processed 8,970 / failed 1,030 |
 | **Retained storage per transaction** | **~9.3 KiB/item** (history_node + executions + visibility) |
 | Prediction, **batched** model (100 items/wf) | **~2.3 GiB** for 260k items |
-| Prediction, **1-workflow-per-transaction** | **~14.6 GiB** for 260k — visibility dominates |
+| **Measured**, **1-workflow-per-transaction** | **42.2 KiB/item** → **~10.5 GiB** for 260k (visibility ~6.3 GiB) |
 
 > **The single biggest driver is how many Temporal *workflow executions* you
 > create.** History and visibility both scale per workflow execution, and the
@@ -124,17 +124,73 @@ The answer depends entirely on **how many workflow executions** 260k transaction
 
 | Model | history+state | visibility | **Total** |
 |---|---:|---:|---:|
-| **Batched** (100 items/wf → 2,600 executions) | 2.17 GiB | 0.13 GiB | **~2.3 GiB** |
-| **1 workflow per transaction** (260k executions) | 2.17 GiB | **12.4 GiB** | **~14.6 GiB** |
+| **Batched** (100 items/wf → 2,600 executions), predicted | 2.17 GiB | 0.13 GiB | **~2.3 GiB** |
+| **1 workflow per transaction** (260k executions), **measured** | 4.13 GiB | 6.34 GiB | **~10.5 GiB** |
 
 > ⚠️ With one workflow per transaction, the index-heavy Postgres visibility table
-> (~50 KiB/execution) **dominates total storage** — larger than the event history
-> itself. Elasticsearch visibility is far cheaper per execution (~1.9 KiB measured
-> on the ES stack) and is worth considering if the workload is one workflow per
-> transaction.
+> (~26 KiB/execution, measured) **dominates total storage** — larger than the event
+> history itself. Elasticsearch visibility is far cheaper per execution (~1.9 KiB
+> measured on the ES stack) and is worth considering if the workload is one workflow
+> per transaction. The 1-workflow row is now measured directly — see
+> [Measured: one workflow per transaction](#measured-one-workflow-per-transaction).
 
-**Recommended provisioning (batched model): ~3 GB** (margin for index overhead,
-WAL, and the caveats below). For a per-transaction-workflow model, budget ~18–20 GB.
+**Recommended provisioning:** batched model **~3 GB**; one-workflow-per-transaction
+model **~12–13 GB** (margin for index overhead, WAL, and the caveats below).
+
+---
+
+## Measured: one workflow per transaction
+
+A second run started **each of the 10,000 items as its own top-level workflow**
+(`ProcessBatchWorkflow` with a one-item range), so the UI shows **10,000 workflow
+records** instead of 101. Same deterministic outcome: **processed 8,970 / failed
+1,030**. This measures the "1 workflow per transaction" model directly, on a fresh
+Postgres-visibility stack.
+
+### Per workflow
+
+Every workflow runs the same 10-step pipeline (`step_01`…`step_10`). A success runs
+all 10 steps; a permanent failure stops early at the failing step. **Transient
+retries do not add history events** — only the final attempt is recorded.
+
+| Sample workflow | Activities | History events |
+|---|---:|---:|
+| Success (all 10 steps) | 10 | 65 |
+| Success + transient retry | 10 | 65 |
+| Permanent fail (stops at failing step) | 7 | 47 |
+| **Average across 10,000** | **9.54** | — |
+
+**Space per workflow (avg, 42.2 KiB):** `history_node` 15.0 KiB + `executions`
+1.6 KiB + `executions_visibility` 25.6 KiB. `history_node` is ≈ 1.6 KiB per
+activity executed.
+
+### Both databases, before vs after (10,000 workflows)
+
+| Table | Before | After | Diff | B/workflow |
+|---|---:|---:|---:|---:|
+| `temporal` · `history_node` | 0.06 MiB | 146.9 MiB | **+146.9 MiB** | 15,407 |
+| `temporal` · `executions` | 0.06 MiB | 15.9 MiB | **+15.8 MiB** | 1,657 |
+| `temporal` · **DB total** | 9.5 MiB | 204.2 MiB | **+194.7 MiB** | — |
+| `temporal_visibility` · `executions_visibility` | 1.6 MiB | 251.2 MiB | **+249.6 MiB** | 26,169 |
+| `temporal_visibility` · **DB total** | 10.0 MiB | 259.8 MiB | **+249.8 MiB** | — |
+
+`executions_visibility` (251 MiB) splits into **5.5 MiB heap + 245.7 MiB across 74
+indexes (~98% index)**, with **10,002 rows** (one per workflow). This is why the
+per-workflow cost (~26 KiB) is ~50× the batched per-item cost (~0.5 KiB): each
+workflow pays for its own visibility row and its full index set.
+
+### 260,000 workflows — `temporal_visibility` only
+
+Scaling the measured 25.6 KiB/workflow linearly:
+
+| `temporal_visibility` | Per workflow | × 260,000 |
+|---|---:|---:|
+| indexes | 25.2 KiB | ~6.24 GiB |
+| heap (row data) | 0.6 KiB | ~0.14 GiB |
+| **`executions_visibility`** | **25.6 KiB** | **~6.34 GiB** |
+
+Compared with batching the same 260k items (100/workflow → ~0.13 GiB visibility),
+the one-workflow model needs **~50× more visibility storage**.
 
 ---
 
