@@ -1,7 +1,7 @@
 """Process-local config and dispatcher tuning — NOT workflow input."""
 
 EXAMPLE_CONTINUED_QUEUE = "example-continued-task-queue"
-MAX_CONCURRENT_ACTIVITIES = 5
+MAX_CONCURRENT_ACTIVITIES = 1
 
 # Dispatcher tuning.
 POLL_INTERVAL_SECONDS = 10   # durable sleep between generation polls
