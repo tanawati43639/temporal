@@ -13,7 +13,7 @@ from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from automation.processes.example_batch_controllable.activities.batch_activities import (
-        process_item,
+        PIPELINE,
     )
     from automation.processes.example_batch_controllable.models.batch import (
         BatchInput,
@@ -28,21 +28,27 @@ class ProcessBatchWorkflow:
     @workflow.run
     async def run(self, input: BatchInput) -> BatchResult:
         async def run_one(item_id: int) -> bool:
-            try:
-                await workflow.execute_activity(
-                    process_item,
-                    item_id,
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        maximum_attempts=3,
-                        non_retryable_error_types=["ValueError"],
-                    ),
-                )
-                return True
-            except ActivityError:
-                workflow.logger.warning("Item %s failed", item_id)
-                return False
+            # Each item flows through the pipeline steps in order. A permanent
+            # failure (non-retryable) stops this item's pipeline and marks it
+            # failed; the remaining items are unaffected.
+            for step_no, step in enumerate(PIPELINE, start=1):
+                try:
+                    await workflow.execute_activity(
+                        step,
+                        item_id,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(
+                            initial_interval=timedelta(seconds=1),
+                            maximum_attempts=3,
+                            non_retryable_error_types=["ValueError"],
+                        ),
+                    )
+                except ActivityError:
+                    workflow.logger.warning(
+                        "Item %s failed at step %s", item_id, step_no
+                    )
+                    return False
+            return True
 
         item_ids = list(range(input.start, input.end))
         results = await asyncio.gather(*(run_one(i) for i in item_ids))

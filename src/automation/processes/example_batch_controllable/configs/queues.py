@@ -6,4 +6,4 @@ scale differently never share a queue.
 BATCH_QUEUE = "example-batch-task-queue"
 
 # Worker tuning for this process.
-MAX_CONCURRENT_ACTIVITIES = 5
+MAX_CONCURRENT_ACTIVITIES = 10

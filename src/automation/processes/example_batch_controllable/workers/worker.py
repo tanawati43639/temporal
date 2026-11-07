@@ -16,7 +16,7 @@ from temporalio.worker import Worker
 
 from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE
 
-from ..activities.batch_activities import process_item
+from ..activities.batch_activities import PIPELINE
 from ..configs.queues import BATCH_QUEUE, MAX_CONCURRENT_ACTIVITIES
 from ..workflows.parent import ControllableBatchParentWorkflow
 from ..workflows.process_batch import ProcessBatchWorkflow
@@ -29,7 +29,7 @@ async def main() -> None:
         client,
         task_queue=BATCH_QUEUE,
         workflows=[ControllableBatchParentWorkflow, ProcessBatchWorkflow],
-        activities=[process_item],
+        activities=[*PIPELINE],
         max_concurrent_activities=MAX_CONCURRENT_ACTIVITIES,
     )
     print(f"Worker running on '{BATCH_QUEUE}' ({TEMPORAL_ADDRESS}/{TEMPORAL_NAMESPACE})")
