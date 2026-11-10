@@ -1,6 +1,6 @@
 module temporal-azure-authz
 
-go 1.27.3
+go 1.26.2
 
 require go.temporal.io/server v1.31.0
 
