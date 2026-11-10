@@ -5,4 +5,5 @@ package-lock.json
 
 # local secrets (Azure OIDC etc.)
 compose/.env.local
+compose/.env.jwks
 .env.local

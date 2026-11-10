@@ -236,12 +236,14 @@ services:
       # NOT set: only the stock cmd/server binary reads them, ours does not,
       # and any value other than empty/`default` (e.g. `custom`) makes the
       # stock binary fail with "unknown authorizer". TEMPORAL_JWT_KEY_SOURCE1
-      # comes from .env.local.
+      # comes from .env.jwks.
       - TEMPORAL_JWT_PERMISSIONS_CLAIM=roles
       - TEMPORAL_JWT_KEY_REFRESH=1h
       - USE_INTERNAL_FRONTEND=true
+    # JWKS URI only (TEMPORAL_JWT_KEY_SOURCE1). Deliberately not .env.local:
+    # the frontend validates tokens and must not hold the OIDC client secret.
     env_file:
-      - .env.local
+      - .env.jwks
     ports:
       - "7233:7233"
       - "8002:8002"
