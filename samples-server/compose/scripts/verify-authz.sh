@@ -23,7 +23,9 @@ ADDRESS=temporal-frontend:7233
 SERVER_NAME=temporal-frontend
 PKI=/pki
 
-PASSED=0; FAILED=0; SKIPPED=0
+PASSED=0; FAILED=0; INCONCLUSIVE=0; SKIPPED=0
+# Positive controls: set to 1 when the matching positive check passed.
+CHECK1_OK=0; CHECK3_OK=0
 
 # The one place the connection flag list lives.
 #   run_temporal <cert-basename> [--token] <temporal args...>
@@ -52,19 +54,32 @@ fail() {
   printf '%s\n' "$OUT" | sed 's/^/      | /'
   FAILED=$((FAILED + 1))
 }
+# A denial proves nothing when its positive control failed: the server returns
+# the same 'Request unauthorized.' for a dead token or a deny-everything stack
+# as for a genuine role denial. Counted separately, and makes the run exit 1.
+inconclusive() { # num desc reason
+  echo "INCONCLUSIVE  check $1: $2"
+  echo "      $3"
+  printf '%s\n' "$OUT" | sed 's/^/      | /'
+  INCONCLUSIVE=$((INCONCLUSIVE + 1))
+}
 skip() { echo "SKIP  check $1: $2 ($3)"; SKIPPED=$((SKIPPED + 1)); }
 
 # Must succeed (exit 0).
 expect_success() { # num desc
-  if [ "$RC" -eq 0 ]; then pass "$1" "$2"
-  else fail "$1" "$2" "expected success, got exit code $RC"; fi
+  if [ "$RC" -eq 0 ]; then pass "$1" "$2"; LAST_OK=1
+  else fail "$1" "$2" "expected success, got exit code $RC"; LAST_OK=0; fi
 }
 
 # Must fail AND the failure must be an authorization denial. Any other failure
 # (container down, bad cert path, connection refused, TLS error) is a FAIL,
 # otherwise a broken stack would look like a passing security test.
-expect_denied() { # num desc
-  if [ "$RC" -eq 0 ]; then
+#
+# Gated on a positive control (arg 3: 1 = control passed, 0 = it did not).
+expect_denied() { # num desc control-ok control-name
+  if [ "$3" -ne 1 ]; then
+    inconclusive "$1" "$2" "positive control (check $4) did not pass, so this denial proves nothing about authorization scoping"
+  elif [ "$RC" -eq 0 ]; then
     fail "$1" "$2" "expected a permission denial, but the command succeeded"
   elif printf '%s' "$OUT" | grep -q 'Request unauthorized'; then
     pass "$1" "$2"
@@ -81,30 +96,37 @@ fi
 echo "== Certificate checks (no token) =="
 run_temporal admin operator namespace list
 expect_success 1 "admin.pem can 'operator namespace list'"
+CHECK1_OK=$LAST_OK
 
 run_temporal client operator namespace list
-expect_denied 2 "client.pem without a token is denied 'operator namespace list'"
+expect_denied 2 "client.pem without a token is denied 'operator namespace list'" "$CHECK1_OK" 1
 
 echo "== Token checks (client.pem + bearer token) =="
 if [ -z "$TOKEN" ]; then
   skip 3 "token can 'workflow list -n uat'" "no JWT given"
   skip 4 "token is denied 'workflow list -n dev'" "no JWT given"
-  skip 5 "token can call GetClusterInfo" "no JWT given"
+  skip 5 "token can 'operator cluster describe' (assumed GetClusterInfo)" "no JWT given"
   echo "NOTICE: token checks skipped; pass a JWT as \$1 to run them."
 else
   run_temporal client --token workflow list -n uat
   expect_success 3 "uat:reader token can 'workflow list -n uat'"
+  CHECK3_OK=$LAST_OK
 
   run_temporal client --token workflow list -n dev
-  expect_denied 4 "uat:reader token is denied 'workflow list -n dev'"
+  expect_denied 4 "uat:reader token is denied 'workflow list -n dev'" "$CHECK3_OK" 3
 
   # Regression: a namespace-scoped user must be allowed the read-only
   # cluster-scoped API class, or the UI's /api/v1/cluster-info returns 403.
-  # `operator cluster describe` reports cluster name and persistence and
-  # visibility stores, which is the GetClusterInfo response.
+  # TODO(unverified): that `temporal operator cluster describe` calls
+  # GetClusterInfo is NOT confirmed (recalled from the CLI source, matched by
+  # its help text only). To confirm: run it with an admin cert while watching
+  # the frontend/authorizer for the API name, or read the CLI source
+  # (temporalio/cli, operator cluster describe). If it calls something else,
+  # swap the command; until then this check may not guard the regression.
   run_temporal client --token operator cluster describe
-  expect_success 5 "uat:reader token can 'operator cluster describe' (GetClusterInfo)"
+  expect_success 5 "uat:reader token can 'operator cluster describe' (assumed to exercise GetClusterInfo; unverified)"
 fi
 
-echo "== Summary: $PASSED passed, $FAILED failed, $SKIPPED skipped =="
-[ "$FAILED" -eq 0 ]
+echo "== Summary: $PASSED passed, $FAILED failed, $INCONCLUSIVE inconclusive, $SKIPPED skipped =="
+# Inconclusive means something was not proven, so it fails the run too.
+[ "$FAILED" -eq 0 ] && [ "$INCONCLUSIVE" -eq 0 ]
