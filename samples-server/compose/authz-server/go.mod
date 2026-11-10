@@ -2,7 +2,11 @@ module temporal-azure-authz
 
 go 1.26.2
 
-require go.temporal.io/server v1.31.0
+require (
+	github.com/golang-jwt/jwt/v4 v4.5.2
+	go.temporal.io/api v1.62.8
+	go.temporal.io/server v1.31.0
+)
 
 require (
 	cel.dev/expr v0.25.1 // indirect
@@ -72,7 +76,6 @@ require (
 	github.com/go-sql-driver/mysql v1.9.0 // indirect
 	github.com/gocql/gocql v1.7.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
@@ -148,7 +151,6 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
-	go.temporal.io/api v1.62.8 // indirect
 	go.temporal.io/auto-scaled-workers v0.0.0-20260407181057-edd947d743d2 // indirect
 	go.temporal.io/sdk v1.41.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
