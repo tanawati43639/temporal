@@ -134,7 +134,7 @@ func TestParsePermission(t *testing.T) {
 		{"system:admin", primitives.SystemLocalNamespace, authorization.RoleAdmin, true},
 		{"temporal-system:admin", primitives.SystemLocalNamespace, authorization.RoleAdmin, true},
 		{"Prod:reader", "Prod", authorization.RoleReader, true},
-		{"dev:write:extra", "dev", authorization.RoleWriter, true},
+		{"dev:write:extra", "", authorization.RoleUndefined, false},
 		{"uatreader", "", authorization.RoleUndefined, false},
 		{":read", "", authorization.RoleUndefined, false},
 		{"uat:", "", authorization.RoleUndefined, false},
@@ -145,7 +145,7 @@ func TestParsePermission(t *testing.T) {
 }
 ```
 
-`{"dev:write:extra", ...}` pins splitting on the *first* colon only, matching the server's `strings.SplitN(p, ":", 2)`. `{"Prod:reader", ...}` pins that namespaces are not case-folded.
+`{"dev:write:extra", ...}` pins splitting on the *first* colon only, matching the server's `strings.SplitN(p, ":", 2)`: the role segment is then the whole string `write:extra`, which is not one of the six accepted words, so the entry is rejected. Do **not** strip trailing colon-separated segments to make this parse — the spec authorizes exactly two divergences from Temporal's parser (role-word spelling and the `system` scope alias), and silently accepting a malformed role string would let an Azure typo grant real permissions. `{"Prod:reader", ...}` pins that namespaces are not case-folded.
 
 - [ ] **Step 2: Run test to verify it fails**
 
