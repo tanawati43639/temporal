@@ -102,6 +102,7 @@ services:
         TEMPORAL_VERSION: ${TEMPORAL_VERSION}
     image: temporal-authz:dev
     container_name: temporal-history
+    restart: on-failure:6
     depends_on:
       temporal-setup:
         condition: service_completed_successfully
@@ -150,6 +151,12 @@ services:
           export TEMPORAL_BROADCAST_ADDRESS
         fi
         exec temporal-authz-server
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7234"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
 
   temporal-matching:
     build:
@@ -158,8 +165,10 @@ services:
         TEMPORAL_VERSION: ${TEMPORAL_VERSION}
     image: temporal-authz:dev
     container_name: temporal-matching
+    restart: on-failure:6
     depends_on:
-      - temporal-history
+      temporal-history:
+        condition: service_healthy
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -198,6 +207,12 @@ services:
           export TEMPORAL_BROADCAST_ADDRESS
         fi
         exec temporal-authz-server
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7235"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
 
   temporal-frontend:
     build:
@@ -206,8 +221,10 @@ services:
         TEMPORAL_VERSION: ${TEMPORAL_VERSION}
     image: temporal-authz:dev
     container_name: temporal-frontend
+    restart: on-failure:6
     depends_on:
-      - temporal-matching
+      temporal-matching:
+        condition: service_healthy
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -277,8 +294,10 @@ services:
         TEMPORAL_VERSION: ${TEMPORAL_VERSION}
     image: temporal-authz:dev
     container_name: temporal-internal-frontend
+    restart: on-failure:6
     depends_on:
-      - temporal-matching
+      temporal-frontend:
+        condition: service_healthy
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -323,6 +342,12 @@ services:
           export TEMPORAL_BROADCAST_ADDRESS
         fi
         exec temporal-authz-server
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7236"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
 
   temporal-worker:
     build:
@@ -331,8 +356,10 @@ services:
         TEMPORAL_VERSION: ${TEMPORAL_VERSION}
     image: temporal-authz:dev
     container_name: temporal-worker
+    restart: on-failure:6
     depends_on:
-      - temporal-internal-frontend
+      temporal-internal-frontend:
+        condition: service_healthy
     environment:
       - DB=postgres12
       - DB_PORT=5432
