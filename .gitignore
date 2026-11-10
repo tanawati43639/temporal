@@ -6,3 +6,6 @@ dist/
 build/
 .env
 .DS_Store
+
+# PKI material — private keys must never be committed
+samples-server/compose/.pki/
