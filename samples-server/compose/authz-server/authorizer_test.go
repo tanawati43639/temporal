@@ -14,6 +14,11 @@ const (
 	testDescribeNamespace = testWorkflowService + "DescribeNamespace"
 	testUpdateNamespace   = testWorkflowService + "UpdateNamespace"
 	testGetSystemInfo     = testWorkflowService + "GetSystemInfo"
+	testListNamespaces    = testWorkflowService + "ListNamespaces"
+	testGetClusterInfo    = testWorkflowService + "GetClusterInfo"
+	testGetSearchAttrs    = testWorkflowService + "GetSearchAttributes"
+	testListClusters      = "/temporal.api.operatorservice.v1.OperatorService/ListClusters"
+	testAddRemoteCluster  = "/temporal.api.operatorservice.v1.OperatorService/AddOrUpdateRemoteCluster"
 )
 
 func TestAzureAuthorizer(t *testing.T) {
@@ -27,13 +32,18 @@ func TestAzureAuthorizer(t *testing.T) {
 		want      authorization.Decision
 	}{
 		{"nil claims denied", nil, testStartWorkflowAPI, "dev", authorization.DecisionDeny},
-		{"nil claims denied on ListNamespaces", nil, listNamespacesAPI, "", authorization.DecisionDeny},
+		{"nil claims denied on ListNamespaces", nil, testListNamespaces, "", authorization.DecisionDeny},
 		{"health check allowed with nil claims", nil, testGetSystemInfo, "", authorization.DecisionAllow},
 		{"system admin updates namespace", &authorization.Claims{Subject: "root", System: authorization.RoleAdmin}, testUpdateNamespace, "dev", authorization.DecisionAllow},
 
-		{"ListNamespaces with a namespace role", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleReader}}, listNamespacesAPI, "", authorization.DecisionAllow},
-		{"ListNamespaces with no roles", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{}}, listNamespacesAPI, "", authorization.DecisionDeny},
-		{"ListNamespaces with undefined role", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleUndefined}}, listNamespacesAPI, "", authorization.DecisionDeny},
+		{"ListNamespaces with a namespace role", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleReader}}, testListNamespaces, "", authorization.DecisionAllow},
+		{"ListNamespaces with no roles", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{}}, testListNamespaces, "", authorization.DecisionDeny},
+		{"ListNamespaces with undefined role", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleUndefined}}, testListNamespaces, "", authorization.DecisionDeny},
+		{"GetClusterInfo with a namespace role", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleReader}}, testGetClusterInfo, "", authorization.DecisionAllow},
+		{"GetSearchAttributes with a namespace role", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleReader}}, testGetSearchAttrs, "", authorization.DecisionAllow},
+		{"GetClusterInfo with no roles", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{}}, testGetClusterInfo, "", authorization.DecisionDeny},
+		{"ListClusters not read-only, denied", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleReader}}, testListClusters, "", authorization.DecisionDeny},
+		{"AddOrUpdateRemoteCluster denied", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"uat": authorization.RoleWriter}}, testAddRemoteCluster, "", authorization.DecisionDeny},
 
 		{"writer starts workflow in own namespace", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"dev": authorization.RoleWriter}}, testStartWorkflowAPI, "dev", authorization.DecisionAllow},
 		{"reader cannot start workflow", &authorization.Claims{Subject: "u", Namespaces: map[string]authorization.Role{"dev": authorization.RoleReader}}, testStartWorkflowAPI, "dev", authorization.DecisionDeny},
