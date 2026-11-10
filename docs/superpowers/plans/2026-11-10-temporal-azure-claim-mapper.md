@@ -359,15 +359,14 @@ Expected: FAIL — `undefined: NewAzureAuthorizer`.
 
 - [ ] **Step 3: Implement `authorizer.go`**
 
-`Authorize` follows the default authorizer's shape:
+**Delegate; do not reimplement.** The struct holds an `authorization.Authorizer` field set to `authorization.NewDefaultAuthorizer()`. `Authorize` is then two branches:
 
-1. `authorization.IsHealthCheckAPI(target.APIName)` → allow.
-2. `claims == nil` → deny.
-3. If `target.APIName == listNamespacesAPI` and the caller holds any non-zero namespace role, allow.
-4. `metadata := api.GetMethodMetadata(target.APIName)`; `hasRole` is `claims.System` for `api.ScopeCluster` and `claims.System | claims.Namespaces[target.Namespace]` for `api.ScopeNamespace`; any other scope denies.
-5. Allow when `hasRole >= requiredRole(metadata.Access)`, where `requiredRole` maps `AccessReadOnly` → `RoleReader`, `AccessWrite` → `RoleWriter`, default → `RoleAdmin`.
+1. If `target.APIName == listNamespacesAPI` **and** `hasAnyNamespaceRole(claims)`, allow, setting `Principal: &commonpb.Principal{Type: claims.AuthType, Name: claims.Subject}` on the result.
+2. Otherwise return `a.delegate.Authorize(ctx, claims, target)` unchanged.
 
-Allowed results set `Principal: &commonpb.Principal{Type: claims.AuthType, Name: claims.Subject}`. Add an unexported `hasAnyNamespaceRole(*authorization.Claims) bool` that ignores zero-valued entries; step 3 uses it.
+Add an unexported `hasAnyNamespaceRole(claims *authorization.Claims) bool` that returns false for nil claims and ignores zero-valued map entries.
+
+Do **not** copy the default authorizer's scope switch, its `requiredRole` mapping, its health-check branch, or its nil-claims branch. Delegation preserves all of them: a nil-claims `ListNamespaces` call fails `hasAnyNamespaceRole` and reaches the delegate, which denies it, and health-check APIs never match `listNamespacesAPI` so they reach the delegate's own allow. Reimplementing that logic would duplicate upstream code, silently pin this authorizer to v1.31.0's API metadata, and is what the quality rubric flags as avoidable duplication — the spec's only stated difference from the default authorizer is the `ListNamespaces` branch, so that is the only thing this file should contain.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
