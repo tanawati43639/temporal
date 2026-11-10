@@ -26,7 +26,7 @@ filtering the `ListNamespaces` *response*.
 | 2 | Build our own server binary that imports `go.temporal.io/server` as a library | Official extension pattern; no source patching |
 | 3 | Map roles from the `roles` claim only | Matches the app roles already defined on the `TemporalUI` registration |
 | 4 | Issue a dedicated `CN=temporal-admin` client cert for admin tooling | Lets tokenless admin callers be identified by certificate instead of granting admin to every tokenless caller |
-| 5 | `ListNamespaces`: allow when the caller holds a role in at least one namespace | UI loads; the cost is that namespace *names* are visible to all signed-in users |
+| 5 | Read-only cluster-scoped APIs: allow when the caller holds a role in at least one namespace | UI loads; the cost is that namespace *names*, cluster identity and the search-attribute schema are visible to every signed-in user |
 | 6 | Normalize role words in our mapper rather than renaming Azure app roles | No Azure changes needed; the table is small and directly testable |
 | 7 | Target `docker-compose-mtls.yaml`, not the currently-running single-container stack | Decision 4 requires mTLS so that `AuthInfo.TLSSubject` is populated |
 
@@ -189,22 +189,44 @@ no special case, keeping this mapper's surface as small as possible.
 
 ### `authorizer.go` — `AzureAuthorizer`
 
-Mirrors the default authorizer, with one deliberate difference.
+**Delegates to the default authorizer**, intercepting one class of call.
 
 ```
 Authorize(ctx, claims, target) →
-  1. claims == nil                             → deny
-  2. claims.System has Admin or Writer         → allow
-  3. target.APIName is ListNamespaces
-     and len(claims.Namespaces) > 0            → allow      ← the one change
-  4. role in claims.Namespaces[target.Namespace]
-     sufficient for the API's required role    → allow
-  5. otherwise                                 → deny
+  1. target is a read-only cluster-scoped API
+     and the caller holds any non-zero namespace role  → allow   ← the one change
+  2. otherwise → default authorizer's decision, verbatim
 ```
 
-Step 3 is what lets the UI load for a namespace-scoped user, per decision 5.
-The tradeoff is explicit: such a user sees every namespace name in the
-dropdown but can only open or act on their own.
+Step 1 is what lets the UI load for a namespace-scoped user, per decision 5.
+Everything else — the health-check allowance, the nil-claims denial, the
+scope/role model — comes from `authorization.NewDefaultAuthorizer()` for free,
+so this file does not restate it and cannot drift from it.
+
+The intercepted class is `{Scope: ScopeCluster, Access: AccessReadOnly}`,
+tested with `api.GetMethodMetadata(target.APIName)`. In v1.31.0 that class is
+exactly four APIs:
+
+| API | Why the caller needs it |
+|---|---|
+| `GetSystemInfo` | already allowed — it is in Temporal's health-check allowlist |
+| `ListNamespaces` | the namespace dropdown |
+| `GetClusterInfo` | the UI refuses to render without it |
+| `GetSearchAttributes` | the search-attribute schema, needed to open a namespace |
+
+**This is deliberately a class and not a list of names.** An earlier revision
+intercepted `ListNamespaces` alone, on the belief — carried over from the
+2026-10 POC — that it was the UI's first and only blocking call. Integration
+testing disproved that: `ListNamespaces` returned 200 while `GetClusterInfo`
+returned 403 in the same browser session, and the UI bounced to `/login`.
+
+The tradeoff is explicit and bounded. A namespace-scoped user can read every
+namespace *name*, the cluster's identity and version, and the names and types
+of search attributes. None of that exposes workflow data or namespace contents.
+Every cluster-scoped *mutating* API — `AddOrUpdateRemoteCluster`,
+`RemoveRemoteCluster`, `ListClusters` and the Nexus endpoint operations —
+stays denied, because those require a `System` role and a namespace-scoped
+caller has `claims.System == 0`.
 
 ### `main.go` — wiring
 

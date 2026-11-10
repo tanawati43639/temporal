@@ -329,7 +329,7 @@ Mirrors `common/authorization/default_authorizer.go` with one deliberate differe
 
 - [ ] **Step 1: Write the failing tests**
 
-`listNamespacesAPI` is `"/temporal.api.workflowservice.v1.WorkflowService/ListNamespaces"`. `api.GetMethodMetadata` reports it as `{Scope: ScopeCluster, Access: AccessReadOnly}` (`common/api/metadata.go:73`), which is why the default authorizer denies it to a namespace-only caller.
+The default authorizer tests every `{Scope: ScopeCluster, Access: AccessReadOnly}` API against `claims.System` alone, so a namespace-only caller is denied all of them. In v1.31.0 that class is exactly `GetSystemInfo` (already allowed via Temporal's health-check allowlist), `ListNamespaces`, `GetClusterInfo` and `GetSearchAttributes` (`common/api/metadata.go:73,114,122,123`). The UI needs the last three, not just `ListNamespaces`.
 
 ```go
 func TestAzureAuthorizer(t *testing.T) {
@@ -337,10 +337,18 @@ func TestAzureAuthorizer(t *testing.T) {
 	// health check API, nil claims                          -> DecisionAllow
 	// System RoleAdmin, UpdateNamespace on "dev"            -> DecisionAllow
 	//
-	// ListNamespaces, claims.Namespaces{"uat": RoleReader}  -> DecisionAllow   <- the change
+	// --- the change: the whole read-only cluster-scoped class ---
+	// ListNamespaces,      Namespaces{"uat": RoleReader}    -> DecisionAllow
+	// GetClusterInfo,      Namespaces{"uat": RoleReader}    -> DecisionAllow
+	// GetSearchAttributes, Namespaces{"uat": RoleReader}    -> DecisionAllow
 	// ListNamespaces, claims.Namespaces empty, System zero  -> DecisionDeny
+	// GetClusterInfo, claims.Namespaces empty, System zero  -> DecisionDeny
 	// ListNamespaces, claims.Namespaces{"uat": RoleUndefined}
 	//                                                       -> DecisionDeny   (Review Focus 5)
+	//
+	// --- cluster-scoped but MUTATING: must stay denied ---
+	// ListClusters,           Namespaces{"uat": RoleReader} -> DecisionDeny
+	// AddOrUpdateRemoteCluster, Namespaces{"uat": RoleWriter} -> DecisionDeny
 	//
 	// StartWorkflowExecution on "dev", Namespaces{"dev": RoleWriter} -> DecisionAllow
 	// StartWorkflowExecution on "dev", Namespaces{"dev": RoleReader} -> DecisionDeny
@@ -361,12 +369,16 @@ Expected: FAIL — `undefined: NewAzureAuthorizer`.
 
 **Delegate; do not reimplement.** The struct holds an `authorization.Authorizer` field set to `authorization.NewDefaultAuthorizer()`. `Authorize` is then two branches:
 
-1. If `target.APIName == listNamespacesAPI` **and** `hasAnyNamespaceRole(claims)`, allow, setting `Principal: &commonpb.Principal{Type: claims.AuthType, Name: claims.Subject}` on the result.
+1. If the target is a read-only cluster-scoped API **and** `hasAnyNamespaceRole(claims)`, allow, setting `Principal: &commonpb.Principal{Type: claims.AuthType, Name: claims.Subject}` on the result. Test the class, not the name: `m := api.GetMethodMetadata(target.APIName)` and then `m.Scope == api.ScopeCluster && m.Access == api.AccessReadOnly`.
 2. Otherwise return `a.delegate.Authorize(ctx, claims, target)` unchanged.
 
 Add an unexported `hasAnyNamespaceRole(claims *authorization.Claims) bool` that returns false for nil claims and ignores zero-valued map entries.
 
-Do **not** copy the default authorizer's scope switch, its `requiredRole` mapping, its health-check branch, or its nil-claims branch. Delegation preserves all of them: a nil-claims `ListNamespaces` call fails `hasAnyNamespaceRole` and reaches the delegate, which denies it, and health-check APIs never match `listNamespacesAPI` so they reach the delegate's own allow. Reimplementing that logic would duplicate upstream code, silently pin this authorizer to v1.31.0's API metadata, and is what the quality rubric flags as avoidable duplication — the spec's only stated difference from the default authorizer is the `ListNamespaces` branch, so that is the only thing this file should contain.
+Intercept the **class**, never a list of API names. An earlier revision of this plan matched `ListNamespaces` by name, on the belief that it was the UI's only blocking call; integration testing disproved that — `ListNamespaces` returned 200 while `GetClusterInfo` returned 403 in the same session and the UI bounced to `/login`. A name list would have to be rediscovered one 403 at a time, and would silently miss APIs added upstream.
+
+Do **not** use `authorization.IsReadOnlyGlobalAPI`: it takes the *short* method name and prefixes `api.WorkflowServicePrefix` itself, so calling it with the full path we are handed would require string surgery.
+
+Do **not** copy the default authorizer's scope switch, its `requiredRole` mapping, its health-check branch, or its nil-claims branch. Delegation preserves all of them: a nil-claims call fails `hasAnyNamespaceRole` and reaches the delegate, which denies it, and health-check APIs reach the delegate's own allow. Cluster-scoped *mutating* APIs are not in the intercepted class, so they too reach the delegate and stay denied for a caller with `claims.System == 0`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
