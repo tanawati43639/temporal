@@ -24,7 +24,7 @@ func TestParsePermission(t *testing.T) {
 		{"system:admin", primitives.SystemLocalNamespace, authorization.RoleAdmin, true},
 		{"temporal-system:admin", primitives.SystemLocalNamespace, authorization.RoleAdmin, true},
 		{"Prod:reader", "Prod", authorization.RoleReader, true},
-		{"dev:write:extra", "dev", authorization.RoleWriter, true},
+		{"dev:write:extra", "", authorization.RoleUndefined, false},
 		{"uatreader", "", authorization.RoleUndefined, false},
 		{":read", "", authorization.RoleUndefined, false},
 		{"uat:", "", authorization.RoleUndefined, false},
