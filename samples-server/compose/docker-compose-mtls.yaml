@@ -467,7 +467,7 @@ services:
         condition: service_healthy
     environment:
       - TEMPORAL_ADDRESS=temporal-frontend:7233
-      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+      - TEMPORAL_CORS_ORIGINS=https://temporal-local.traiyotee.app
       # UI → Temporal frontend over mTLS. The UI's config.yaml reads these
       # unsuffixed var names (NOT the `_PATH` form the Temporal CLI uses).
       - TEMPORAL_TLS_CERT=/pki/client.pem
@@ -483,7 +483,7 @@ services:
       - TEMPORAL_AUTH_ENABLED=true
       - TEMPORAL_AUTH_TYPE=oidc
       - TEMPORAL_AUTH_LABEL=Azure AD
-      - TEMPORAL_AUTH_CALLBACK_URL=http://localhost:8080/auth/sso/callback
+      - TEMPORAL_AUTH_CALLBACK_URL=https://temporal-local.traiyotee.app/auth/sso/callback
       - TEMPORAL_AUTH_SCOPES=openid,profile,email
       - TEMPORAL_AUTH_USE_ID_TOKEN_AS_BEARER=true
     # Tenant-specific values (PROVIDER_URL, CLIENT_ID, CLIENT_SECRET) and the

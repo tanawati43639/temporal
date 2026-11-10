@@ -78,11 +78,9 @@ admintools:
     - name: pki
       mountPath: /pki
       readOnly: true
+  # NOTE: chart ตั้ง TEMPORAL_ADDRESS/TEMPORAL_CLI_ADDRESS ให้อยู่แล้ว ห้ามใส่ซ้ำ
+  # (ใส่ซ้ำ = server-side apply fail "duplicate entries")
   additionalEnv:
-    - name: TEMPORAL_ADDRESS
-      value: "temporal-frontend.temporal.svc:7233"
-    - name: TEMPORAL_CLI_ADDRESS
-      value: "temporal-frontend.temporal.svc:7233"
     - name: TEMPORAL_TLS
       value: "true"
     - name: TEMPORAL_TLS_CLIENT_CERT_PATH
@@ -124,10 +122,10 @@ web:
     # ถ้าจะเปิด public (LoadBalancer/Ingress) ต้องแก้ค่านี้เป็น URL จริง + เพิ่ม
     # redirect URI นั้นใน App registration
     - name: TEMPORAL_AUTH_CALLBACK_URL
-      value: "http://localhost:8080/auth/sso/callback"
+      value: "https://temporal-local.traiyotee.app/auth/sso/callback"
     - name: TEMPORAL_AUTH_SCOPES
       value: "openid,profile,email"
     - name: TEMPORAL_AUTH_USE_ID_TOKEN_AS_BEARER
       value: "true"
     - name: TEMPORAL_CORS_ORIGINS
-      value: "http://localhost:3000"
+      value: "https://temporal-local.traiyotee.app"
