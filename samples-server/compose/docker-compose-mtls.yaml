@@ -1,20 +1,21 @@
 # ──────────────────────────────────────────────────────────────────
 # Multi-role Temporal + mTLS everywhere.
 #
-# Three Temporal services (frontend / history / matching) each in its own
-# container, communicating over mTLS using a shared "cluster" cert. The
-# frontend's external gRPC port :7233 also requires mTLS, so clients
-# (temporal-ui, admin-tools, SDKs) must present a client cert signed by the
-# same CA.
+# Five Temporal services (frontend / internal-frontend / history / matching /
+# worker) each in its own container, communicating over mTLS using a shared
+# "cluster" cert. The frontend's external gRPC port :7233 also requires mTLS,
+# so clients (temporal-ui, admin-tools, SDKs) must present a client cert
+# signed by the same CA.
 #
-# The internal `worker` service is intentionally omitted — it would hit the
-# frontend over gRPC with no auth header and the default authorizer would
-# reject it. User-written Workers (via SDK) are unaffected; only Temporal's
-# own system workflows (scanner, archival) stop running — acceptable for a POC.
+# All Temporal services run the custom temporal-authz-server binary (image
+# temporal-authz:dev, built from ./authz-server). On the external frontend it
+# enforces namespace-level RBAC from Azure AD JWT roles. The internal-frontend
+# (:7236, compose network only) carries Temporal's own worker traffic, which
+# has no JWT, so it never touches the external frontend's authorizer.
 #
-# No external authz (Azure JWT) is wired here. The security boundary is the
-# client cert alone: anyone with a cert signed by this CA can call any API.
-# For namespace-level RBAC, layer Azure OIDC on top later.
+# Tokenless admin tooling (create-namespace, admin-tools) uses the
+# CN=temporal-admin cert (admin.pem), which the claim mapper maps to cluster
+# admin. temporal-ui keeps client.pem and authenticates its users by token.
 #
 # Bootstrap:
 #   ./tls/run-mtls.sh                       # one-time: build + run PKI generator
@@ -95,7 +96,11 @@ services:
   #   - a single CA that signs everything the server trusts
 
   temporal-history:
-    image: temporalio/server:${TEMPORAL_VERSION}
+    build:
+      context: ./authz-server
+      args:
+        TEMPORAL_VERSION: ${TEMPORAL_VERSION}
+    image: temporal-authz:dev
     container_name: temporal-history
     depends_on:
       temporal-setup:
@@ -110,6 +115,7 @@ services:
       - ES_SEEDS=elasticsearch
       - ES_VERSION=v7
       - BIND_ON_IP=0.0.0.0
+      - TEMPORAL_SERVICES=history
       - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
       - PROMETHEUS_ENDPOINT=0.0.0.0:8000
       # --- Internode mTLS (cluster cert, both directions) ---
@@ -143,10 +149,14 @@ services:
           : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
           export TEMPORAL_BROADCAST_ADDRESS
         fi
-        exec temporal-server start --service=history
+        exec temporal-authz-server
 
   temporal-matching:
-    image: temporalio/server:${TEMPORAL_VERSION}
+    build:
+      context: ./authz-server
+      args:
+        TEMPORAL_VERSION: ${TEMPORAL_VERSION}
+    image: temporal-authz:dev
     container_name: temporal-matching
     depends_on:
       - temporal-history
@@ -160,6 +170,7 @@ services:
       - ES_SEEDS=elasticsearch
       - ES_VERSION=v7
       - BIND_ON_IP=0.0.0.0
+      - TEMPORAL_SERVICES=matching
       - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
       - PROMETHEUS_ENDPOINT=0.0.0.0:8001
       - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
@@ -186,10 +197,14 @@ services:
           : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
           export TEMPORAL_BROADCAST_ADDRESS
         fi
-        exec temporal-server start --service=matching
+        exec temporal-authz-server
 
   temporal-frontend:
-    image: temporalio/server:${TEMPORAL_VERSION}
+    build:
+      context: ./authz-server
+      args:
+        TEMPORAL_VERSION: ${TEMPORAL_VERSION}
+    image: temporal-authz:dev
     container_name: temporal-frontend
     depends_on:
       - temporal-matching
@@ -203,6 +218,7 @@ services:
       - ES_SEEDS=elasticsearch
       - ES_VERSION=v7
       - BIND_ON_IP=0.0.0.0
+      - TEMPORAL_SERVICES=frontend
       - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
       - PROMETHEUS_ENDPOINT=0.0.0.0:8002
       - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
@@ -214,19 +230,18 @@ services:
       - TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
       - TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
       - TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
-      # Server-side RBAC was attempted and reverted. The qa-user (non-guest,
-      # with `uat:reader` role) produced a token containing the correct
-      # `roles` claim — verified via jwt.ms — but the default authorizer
-      # treats `ListNamespaces` as a cluster-scoped API that requires a
-      # `system:*` role, so a namespace-only user can't even load the UI
-      # (the UI calls ListNamespaces first thing). Working around this
-      # needs either `system:reader` for everyone (loses isolation) or a
-      # custom Go authorizer that filters ListNamespaces. See project
-      # memory [[project-temporal-rbac]] for the full timeline.
-      # - TEMPORAL_AUTH_AUTHORIZER=default
-      # - TEMPORAL_AUTH_CLAIM_MAPPER=default
-      # - TEMPORAL_JWT_PERMISSIONS_CLAIM=roles
-      # - TEMPORAL_JWT_KEY_REFRESH=1h
+      # --- Azure AD RBAC ---
+      # Claim mapper + authorizer are injected in code by temporal-authz-server.
+      # TEMPORAL_AUTH_AUTHORIZER / TEMPORAL_AUTH_CLAIM_MAPPER are deliberately
+      # NOT set: only the stock cmd/server binary reads them, ours does not,
+      # and any value other than empty/`default` (e.g. `custom`) makes the
+      # stock binary fail with "unknown authorizer". TEMPORAL_JWT_KEY_SOURCE1
+      # comes from .env.local.
+      - TEMPORAL_JWT_PERMISSIONS_CLAIM=roles
+      - TEMPORAL_JWT_KEY_REFRESH=1h
+      - USE_INTERNAL_FRONTEND=true
+    env_file:
+      - .env.local
     ports:
       - "7233:7233"
       - "8002:8002"
@@ -245,7 +260,7 @@ services:
           : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
           export TEMPORAL_BROADCAST_ADDRESS
         fi
-        exec temporal-server start --service=frontend
+        exec temporal-authz-server
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "7233"]
       interval: 5s
@@ -253,9 +268,115 @@ services:
       start_period: 30s
       retries: 60
 
+  temporal-internal-frontend:
+    build:
+      context: ./authz-server
+      args:
+        TEMPORAL_VERSION: ${TEMPORAL_VERSION}
+    image: temporal-authz:dev
+    container_name: temporal-internal-frontend
+    depends_on:
+      - temporal-matching
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+      - BIND_ON_IP=0.0.0.0
+      - TEMPORAL_SERVICES=internal-frontend
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8003
+      - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
+      - TEMPORAL_TLS_SERVER_KEY=/pki/cluster-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_REQUIRE_CLIENT_AUTH=true
+      - TEMPORAL_TLS_INTERNODE_SERVER_NAME=temporal-cluster
+      - TEMPORAL_TLS_FRONTEND_CERT=/pki/frontend.pem
+      - TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
+      - TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
+      # Must match the frontend: makes the config template emit the internal-
+      # frontend service and drop publicClient, so internal traffic stays off
+      # the external frontend.
+      - USE_INTERNAL_FRONTEND=true
+    expose:
+      - "7236"
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    networks:
+      - temporal-network
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        : "$${BIND_ON_IP:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+        export BIND_ON_IP
+        if [ "$${BIND_ON_IP}" = "0.0.0.0" ] || [ "$${BIND_ON_IP}" = "::0" ]; then
+          : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+          export TEMPORAL_BROADCAST_ADDRESS
+        fi
+        exec temporal-authz-server
+
+  temporal-worker:
+    build:
+      context: ./authz-server
+      args:
+        TEMPORAL_VERSION: ${TEMPORAL_VERSION}
+    image: temporal-authz:dev
+    container_name: temporal-worker
+    depends_on:
+      - temporal-internal-frontend
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+      - BIND_ON_IP=0.0.0.0
+      - TEMPORAL_SERVICES=worker
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8004
+      - TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
+      - TEMPORAL_TLS_SERVER_KEY=/pki/cluster-key.pem
+      - TEMPORAL_TLS_SERVER_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_REQUIRE_CLIENT_AUTH=true
+      - TEMPORAL_TLS_INTERNODE_SERVER_NAME=temporal-cluster
+      - TEMPORAL_TLS_FRONTEND_CERT=/pki/frontend.pem
+      - TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
+      - TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
+      - TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
+      # Must match the frontend: makes the config template emit the internal-
+      # frontend service and drop publicClient, so internal traffic stays off
+      # the external frontend.
+      - USE_INTERNAL_FRONTEND=true
+    volumes:
+      - temporal_mtls_pki:/pki:ro
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    networks:
+      - temporal-network
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        : "$${BIND_ON_IP:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+        export BIND_ON_IP
+        if [ "$${BIND_ON_IP}" = "0.0.0.0" ] || [ "$${BIND_ON_IP}" = "::0" ]; then
+          : "$${TEMPORAL_BROADCAST_ADDRESS:=$$(getent hosts "$$(hostname)" | awk '{print $$1;}')}"
+          export TEMPORAL_BROADCAST_ADDRESS
+        fi
+        exec temporal-authz-server
+
   # ─── Namespace creation ──────────────────────────────────────────
-  # Uses the client cert to speak TLS to the frontend. Namespaces persist
-  # in postgres so this only needs to succeed once.
+  # Uses the admin cert (CN=temporal-admin) to speak TLS to the frontend.
+  # Namespaces persist in postgres so this only needs to succeed once.
   temporal-create-namespace:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
     container_name: temporal-create-namespace
@@ -269,8 +390,8 @@ services:
       # Temporal CLI env vars — note the `_CLIENT_` and `_PATH` suffixes;
       # these differ from the server-side `TEMPORAL_TLS_SERVER_*` vars above.
       - TEMPORAL_TLS=true
-      - TEMPORAL_TLS_CLIENT_CERT_PATH=/pki/client.pem
-      - TEMPORAL_TLS_CLIENT_KEY_PATH=/pki/client-key.pem
+      - TEMPORAL_TLS_CLIENT_CERT_PATH=/pki/admin.pem
+      - TEMPORAL_TLS_CLIENT_KEY_PATH=/pki/admin-key.pem
       - TEMPORAL_TLS_SERVER_CA_CERT_PATH=/pki/ca.pem
       - TEMPORAL_TLS_SERVER_NAME=temporal-frontend
     networks:
@@ -294,8 +415,8 @@ services:
       - TEMPORAL_ADDRESS=temporal-frontend:7233
       - TEMPORAL_CLI_ADDRESS=temporal-frontend:7233
       - TEMPORAL_TLS=true
-      - TEMPORAL_TLS_CLIENT_CERT_PATH=/pki/client.pem
-      - TEMPORAL_TLS_CLIENT_KEY_PATH=/pki/client-key.pem
+      - TEMPORAL_TLS_CLIENT_CERT_PATH=/pki/admin.pem
+      - TEMPORAL_TLS_CLIENT_KEY_PATH=/pki/admin-key.pem
       - TEMPORAL_TLS_SERVER_CA_CERT_PATH=/pki/ca.pem
       - TEMPORAL_TLS_SERVER_NAME=temporal-frontend
     networks:
@@ -328,8 +449,8 @@ services:
       # --- Azure (Entra ID) OIDC login ---
       # Forces users to sign in before they can see any UI page. The token
       # is also attached as an Authorization-Extras Bearer header on gRPC
-      # calls to the frontend, but the server has no authorizer configured,
-      # so the token is validated by the UI only and ignored by the server.
+      # calls to the frontend, where the claim mapper validates it and the
+      # authorizer enforces namespace roles.
       - TEMPORAL_AUTH_ENABLED=true
       - TEMPORAL_AUTH_TYPE=oidc
       - TEMPORAL_AUTH_LABEL=Azure AD
