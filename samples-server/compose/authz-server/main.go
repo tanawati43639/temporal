@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"go.temporal.io/server/common/authorization"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
@@ -35,6 +36,10 @@ func newServer(logger log.Logger) (temporal.Server, error) {
 		temporal.ForServices(servicesFromEnv()),
 		temporal.WithConfig(cfg),
 		temporal.WithLogger(logger),
+		temporal.WithClaimMapper(func(c *config.Config) authorization.ClaimMapper {
+			return NewAzureClaimMapper(c, logger)
+		}),
+		temporal.WithAuthorizer(NewAzureAuthorizer()),
 		temporal.InterruptOn(temporal.InterruptCh()),
 	)
 }
