@@ -48,4 +48,7 @@ External SDK clients (outside Docker) use:
   tls_key      = ./.pki/client-key.pem
   tls_ca       = ./.pki/ca.pem
   server_name  = temporal-frontend
+
+Admin tools use ./.pki/admin.pem / ./.pki/admin-key.pem instead of client.pem;
+that credential (CN=temporal-admin) grants cluster admin without a token.
 DONE

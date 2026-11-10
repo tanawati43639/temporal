@@ -8,6 +8,7 @@
 #   - frontend.pem / frontend-key.pem — external gRPC server cert on :7233
 #   - client.pem / client-key.pem   — cert for every external caller
 #                                     (temporal-ui, admin-tools, SDK clients)
+#   - admin.pem / admin-key.pem     — CN=temporal-admin, cluster admin via claim mapper
 #
 # Output volumes:
 #   /pki       — mounted into every service that needs certs at runtime
@@ -66,9 +67,16 @@ JSON
           -hostname="temporal-client" - \
       | cfssljson -bare client
 
+    # 6) Admin client cert — the claim mapper grants cluster admin to this exact
+    #    CN. Used only by admin tooling; SDK clients keep the generic client cert.
+    echo '{"CN":"temporal-admin","hosts":[""],"key":{"algo":"rsa","size":2048}}' \
+      | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem \
+          -hostname="temporal-admin" - \
+      | cfssljson -bare admin
+
     # 644 for everything — the Temporal container runs as a non-root user,
     # and 640 locks it out of the private keys. Fine for a dev PKI.
     chmod 644 *.pem
 EOF
 
-ENTRYPOINT ["/bin/sh", "-c", "cp /pki/ca.pem /pki/client.pem /pki/client-key.pem /pki-out/"]
+ENTRYPOINT ["/bin/sh", "-c", "cp /pki/ca.pem /pki/client.pem /pki/client-key.pem /pki/admin.pem /pki/admin-key.pem /pki-out/"]
