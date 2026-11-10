@@ -212,7 +212,7 @@ dropdown but can only open or act on their own.
 cfg, err := config.Load(config.WithEmbedded())
 // ...
 temporal.NewServer(
-    temporal.ForServices(temporal.DefaultServices),
+    temporal.ForServices(servicesFromEnv()),
     temporal.WithConfig(cfg),
     temporal.WithClaimMapper(func(c *config.Config) authorization.ClaimMapper {
         return NewAzureClaimMapper(c, logger)
@@ -222,8 +222,19 @@ temporal.NewServer(
 )
 ```
 
-The service list comes from `TEMPORAL_SERVICES`, which `temporal.ForServices`
-already honours, so each compose container keeps starting a single role.
+**The service list must be read from the environment by us.**
+`temporal.ForServices(names []string)` takes an explicit list and the library
+never consults `TEMPORAL_SERVICES` — `temporal/server_option.go:55`. In the
+stock binary that variable is a urfave/cli flag on `cmd/server`, which passes
+the parsed value to `ForServices` at `cmd/server/main.go:223`. A custom
+`main.go` that hardcodes `temporal.DefaultServices` would therefore start
+frontend, history, matching *and* worker inside **every** container, silently
+destroying the multirole split — and each container would appear to work.
+
+`servicesFromEnv()` reads `TEMPORAL_SERVICES`, splits on commas, trims
+whitespace, discards empty entries, and falls back to `temporal.DefaultServices`
+when the variable is unset or yields nothing. It carries a unit test, because
+the failure mode is silent.
 
 ### Container integration
 
