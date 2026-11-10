@@ -134,3 +134,29 @@ func TestParseAndValidate(t *testing.T) {
 		}
 	})
 }
+
+func TestParseAndValidateWithAudience(t *testing.T) {
+	provider, key := newTestKeyProvider(t)
+	tok := signTestToken(t, key, jwt.MapClaims{
+		"sub": "user-1",
+		"aud": "api://temporal",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+
+	if _, err := ParseAndValidateWithAudience(tok, provider, "api://temporal"); err != nil {
+		t.Errorf("matching audience: unexpected error: %v", err)
+	}
+	if _, err := ParseAndValidateWithAudience(tok, provider, "api://other"); err == nil {
+		t.Error("expected error for mismatched audience")
+	}
+	if _, err := ParseAndValidateWithAudience(tok, provider, ""); err != nil {
+		t.Errorf("empty audience must skip the check: %v", err)
+	}
+	if _, err := ParseAndValidateWithAudience(tok, provider, "  "); err != nil {
+		t.Errorf("blank audience must skip the check: %v", err)
+	}
+	noAud := signTestToken(t, key, jwt.MapClaims{"exp": time.Now().Add(time.Hour).Unix()})
+	if _, err := ParseAndValidateWithAudience(noAud, provider, "api://temporal"); err == nil {
+		t.Error("expected error for token with no aud when audience required")
+	}
+}

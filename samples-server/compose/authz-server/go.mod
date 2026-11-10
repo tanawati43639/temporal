@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/golang-jwt/jwt/v4 v4.5.2
+	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.62.8
 	go.temporal.io/server v1.31.0
 )
@@ -128,7 +129,6 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/temporalio/ringpop-go v0.0.0-20250130211428-b97329e994f7 // indirect
 	github.com/temporalio/sqlparser v0.0.0-20231115171017-f4060bcfa6cb // indirect
 	github.com/temporalio/tchannel-go v1.22.1-0.20240528171429-1db37fdea938 // indirect

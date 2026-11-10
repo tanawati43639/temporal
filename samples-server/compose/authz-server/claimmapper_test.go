@@ -138,6 +138,21 @@ func TestAzureClaimMapper(t *testing.T) {
 	})
 }
 
+func TestAzureClaimMapperAudience(t *testing.T) {
+	m, sign := newTestMapper(t)
+	tok := sign(jwt.MapClaims{"aud": "api://temporal", "roles": []any{"dev:read"}})
+
+	c, err := m.GetClaims(&authorization.AuthInfo{AuthToken: tok, Audience: "api://temporal"})
+	require.NoError(t, err)
+	require.Equal(t, authorization.RoleReader, c.Namespaces["dev"])
+
+	_, err = m.GetClaims(&authorization.AuthInfo{AuthToken: tok, Audience: "api://other"})
+	require.Error(t, err)
+
+	_, err = m.GetClaims(&authorization.AuthInfo{AuthToken: tok})
+	require.NoError(t, err)
+}
+
 func TestAzureClaimMapperAuthInfoRequired(t *testing.T) {
 	require.False(t, (&AzureClaimMapper{}).AuthInfoRequired())
 }

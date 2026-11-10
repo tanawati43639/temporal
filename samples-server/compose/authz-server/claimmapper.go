@@ -59,7 +59,7 @@ func (m *AzureClaimMapper) GetClaims(authInfo *authorization.AuthInfo) (*authori
 	if err != nil {
 		return nil, err
 	}
-	jwtClaims, err := ParseAndValidate(tokenString, m.keyProvider)
+	jwtClaims, err := ParseAndValidateWithAudience(tokenString, m.keyProvider, authInfo.Audience)
 	if err != nil {
 		if _, ok := err.(serviceerror.ServiceError); ok {
 			return nil, err

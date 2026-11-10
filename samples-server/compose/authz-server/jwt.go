@@ -26,6 +26,13 @@ func StripBearer(authToken string) (string, error) {
 // tokenString using keys from provider. It mirrors the unexported parseJWT in
 // go.temporal.io/server/common/authorization.
 func ParseAndValidate(tokenString string, provider authorization.TokenKeyProvider) (jwt.MapClaims, error) {
+	return ParseAndValidateWithAudience(tokenString, provider, "")
+}
+
+// ParseAndValidateWithAudience is ParseAndValidate plus an audience check that
+// is enforced only when audience is non-blank, as in upstream's
+// parseJWTWithAudience.
+func ParseAndValidateWithAudience(tokenString string, provider authorization.TokenKeyProvider, audience string) (jwt.MapClaims, error) {
 	parser := jwt.NewParser(jwt.WithValidMethods(provider.SupportedMethods()))
 
 	var keyFunc jwt.Keyfunc
@@ -64,6 +71,9 @@ func ParseAndValidate(tokenString string, provider authorization.TokenKeyProvide
 	}
 	if err := claims.Valid(); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(audience) != "" && !claims.VerifyAudience(audience, true) {
+		return nil, serviceerror.NewPermissionDenied("audience mismatch", "")
 	}
 	return claims, nil
 }
