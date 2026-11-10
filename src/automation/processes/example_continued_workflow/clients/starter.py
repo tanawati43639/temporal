@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from temporalio.client import Client
 
-from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, temporal_ui_link
+from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, get_tls_config, temporal_ui_link
 
 from ..configs.queues import EXAMPLE_CONTINUED_QUEUE
 from ..models.continued import ContinuedInput
@@ -29,7 +29,7 @@ async def main() -> None:
     parser.add_argument("--wait-result", action="store_true")
     args = parser.parse_args()
 
-    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
+    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE, tls=get_tls_config())
 
     stop_time = (
         datetime.now(timezone.utc) + timedelta(seconds=args.run_seconds)

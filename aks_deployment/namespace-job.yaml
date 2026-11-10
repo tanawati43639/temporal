@@ -1,0 +1,74 @@
+# ──────────────────────────────────────────────────────────────────
+# สร้าง namespace default/dev/uat/prod ผ่าน frontend ที่บังคับ mTLS
+# ใช้ admin cert (CN=temporal-admin → claim mapper ให้สิทธิ์ cluster admin โดยไม่ต้องมี token)
+# แทน namespace job ของ chart (ที่เราปิดไว้ด้วย server.config.namespaces.create=false)
+#
+# apply หลัง helm upgrade:  kubectl apply -f aks/namespace-job.yaml
+# รันซ้ำได้ (idempotent): ลบ job เก่าก่อน → kubectl -n temporal delete job temporal-create-namespace --ignore-not-found
+# ──────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-create-namespace
+  namespace: temporal
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      name: temporal-create-namespace
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+        - name: pki
+          secret:
+            secretName: temporal-mtls-pki
+            defaultMode: 0444
+      containers:
+        - name: create-namespace
+          image: temporalio/admin-tools:1.31.0
+          volumeMounts:
+            - name: pki
+              mountPath: /pki
+              readOnly: true
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: "temporal-frontend.temporal.svc:7233"
+            # temporal CLI mTLS ด้วย admin cert
+            - name: TEMPORAL_TLS
+              value: "true"
+            - name: TEMPORAL_TLS_CLIENT_CERT_PATH
+              value: /pki/admin.pem
+            - name: TEMPORAL_TLS_CLIENT_KEY_PATH
+              value: /pki/admin-key.pem
+            - name: TEMPORAL_TLS_SERVER_CA_CERT_PATH
+              value: /pki/ca.pem
+            - name: TEMPORAL_TLS_SERVER_NAME
+              value: temporal-frontend
+            - name: NAMESPACES
+              value: "default dev uat prod"
+            - name: RETENTION
+              value: "3d"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "รอ frontend พร้อม (mTLS)..."
+              n=0
+              until temporal operator cluster health >/dev/null 2>&1; do
+                n=$((n+1))
+                if [ "$n" -ge 60 ]; then
+                  echo "frontend ไม่พร้อมหลังรอ 60 ครั้ง"; exit 1
+                fi
+                echo "  ยังไม่พร้อม รออีก... ($n/60)"; sleep 5
+              done
+              echo "frontend healthy"
+              for ns in $NAMESPACES; do
+                if temporal operator namespace describe -n "$ns" >/dev/null 2>&1; then
+                  echo "namespace '$ns' มีอยู่แล้ว"
+                else
+                  temporal operator namespace create -n "$ns" --retention "$RETENTION"
+                  echo "สร้าง namespace '$ns' (retention $RETENTION)"
+                fi
+              done
+              echo "ครบทุก namespace"

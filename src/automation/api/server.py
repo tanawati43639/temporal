@@ -48,9 +48,10 @@ async def list_all_workflows(
         ),
     ),
     limit: int = Query(default=20, ge=1, le=100),
+    namespace: str | None = Query(default=None, description="Temporal namespace (default from env)"),
 ):
     """List workflows across all types using Visibility."""
-    client = await get_client()
+    client = await get_client(namespace)
     rows = []
     async for wf in client.list_workflows(query=query or None, page_size=limit):
         rows.append(
@@ -71,10 +72,12 @@ async def list_all_workflows(
 
 @app.get("/api/workflows/{workflow_id}/history", tags=["global"])
 async def workflow_history(
-    workflow_id: str, limit: int = Query(default=100, ge=1, le=1000)
+    workflow_id: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    namespace: str | None = Query(default=None, description="Temporal namespace (default from env)"),
 ):
     """Return a compact view of the first `limit` events in history."""
-    client = await get_client()
+    client = await get_client(namespace)
     try:
         handle = client.get_workflow_handle(workflow_id)
         events = []
@@ -98,9 +101,11 @@ async def workflow_history(
 
 
 @app.get("/api/dashboard/stats", tags=["global"])
-async def dashboard_stats():
+async def dashboard_stats(
+    namespace: str | None = Query(default=None, description="Temporal namespace (default from env)"),
+):
     """Cluster-wide execution counts by status + per registered type."""
-    client = await get_client()
+    client = await get_client(namespace)
 
     async def count_query(q: str) -> int:
         n = 0

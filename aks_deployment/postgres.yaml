@@ -1,0 +1,111 @@
+# PostgreSQL ในคลัสเตอร์ สำหรับ Temporal POC บน AKS
+# ----------------------------------------------------------------------------
+# เป็น persistence (default + visibility store) ของ Temporal — รันเป็น pod เดียว
+# พร้อม PersistentVolume เพื่อให้ data อยู่รอด pod restart
+#
+# ข้อจำกัดที่ "ตั้งใจ" ให้เป็นสำหรับ POC: replica เดียว, ไม่มี HA/backup.
+# production ควรย้ายไป Azure Database for PostgreSQL แล้วแก้แค่ connectAddr +
+# secret ใน aks/temporal-values.yaml
+#
+# password อ่านจาก Secret ชื่อ `temporal-db-password` (key: password) ที่ต้อง
+# สร้างก่อน apply ไฟล์นี้ — ดูขั้นตอนใน aks/README.md (ไม่ commit ค่า plaintext)
+# ----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-postgres
+  namespace: temporal
+  labels:
+    app: temporal-postgres
+spec:
+  # ClusterIP ธรรมดา — เข้าถึงจากในคลัสเตอร์ที่ temporal-postgres.temporal.svc:5432
+  type: ClusterIP
+  selector:
+    app: temporal-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: temporal-postgres-data
+  namespace: temporal
+  labels:
+    app: temporal-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # ไม่ระบุ storageClassName → ใช้ default StorageClass ของ AKS
+  # (ปกติคือ managed-csi / managed-premium) ถ้าคลัสเตอร์ไม่มี default ให้ใส่เอง
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-postgres
+  namespace: temporal
+  labels:
+    app: temporal-postgres
+spec:
+  replicas: 1
+  # POC: pod เดียว + PVC → ใช้ Recreate กันสอง pod แย่ง mount volume เดียวกัน
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: temporal-postgres
+  template:
+    metadata:
+      labels:
+        app: temporal-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            # superuser = postgres (default) → ให้ Temporal chart ใช้สิทธิ์นี้
+            # createDatabase สร้าง temporal / temporal_visibility ได้ โดยไม่ชน
+            # db ที่ image สร้างตอน init (ไม่ตั้ง POSTGRES_DB ไว้โดยตั้งใจ)
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: temporal-db-password
+                  key: password
+            # เก็บ data ใน subdir เพื่อเลี่ยงปัญหา lost+found บน mount บางชนิด
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: temporal-postgres-data

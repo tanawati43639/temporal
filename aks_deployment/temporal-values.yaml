@@ -1,0 +1,94 @@
+# Helm values override สำหรับ chart temporal/temporal (pin version 1.7.0, Temporal 1.32.0)
+# ----------------------------------------------------------------------------
+# POC: server-only บน AKS, persistence = PostgreSQL ในคลัสเตอร์ (aks/postgres.yaml)
+# ทั้ง default และ visibility store ใช้ Postgres (SQL visibility — ไม่ใช้ Elasticsearch)
+#
+# chart รุ่นนี้ "ไม่มี" subchart ฐานข้อมูล bundled แล้ว เราจึงชี้ไป Postgres ที่เรา
+# deploy เอง และใช้ field พิเศษของ chart:
+#   createDatabase: true  → chart สร้าง database ให้ (ผ่าน defaultDb=postgres)
+#   manageSchema:   true  → chart รัน schema setup/update job ให้อัตโนมัติ
+#   existingSecret        → อ่าน password จาก Secret temporal-db-password (key password)
+#
+# ติดตั้ง: helm install temporal temporal/temporal -n temporal \
+#            --version 1.7.0 -f aks/temporal-values.yaml --timeout 15m
+# ----------------------------------------------------------------------------
+
+server:
+  # POC: ทุก role (frontend/history/matching/internal-frontend) รัน single replica
+  replicaCount: 1
+
+  config:
+    persistence:
+      defaultStore: default
+      visibilityStore: visibility
+      # เปลี่ยนภายหลังไม่ได้หลัง deploy ครั้งแรก — ใช้ default 512 ตาม spec
+      numHistoryShards: 512
+      datastores:
+        default:
+          sql:
+            pluginName: postgres12
+            databaseName: temporal
+            connectAddr: "temporal-postgres.temporal.svc.cluster.local:5432"
+            connectProtocol: "tcp"
+            user: postgres
+            existingSecret: temporal-db-password
+            secretKey: password
+            # ให้ chart สร้าง db + จัดการ schema เอง
+            createDatabase: true
+            manageSchema: true
+            defaultDb: postgres
+            maxConns: 20
+            maxIdleConns: 20
+            maxConnLifetime: "1h"
+        visibility:
+          sql:
+            pluginName: postgres12
+            databaseName: temporal_visibility
+            connectAddr: "temporal-postgres.temporal.svc.cluster.local:5432"
+            connectProtocol: "tcp"
+            user: postgres
+            existingSecret: temporal-db-password
+            secretKey: password
+            createDatabase: true
+            manageSchema: true
+            defaultDb: postgres
+            maxConns: 20
+            maxIdleConns: 20
+            maxConnLifetime: "1h"
+
+    # สร้าง namespace `default` ให้อัตโนมัติผ่าน Helm hook (ใช้ยืนยัน DoD)
+    namespaces:
+      create: true
+      namespace:
+        - name: default
+          retention: 3d
+
+  # POC ไม่ได้ติดตั้ง Prometheus Operator → ปิด ServiceMonitor กัน error
+  metrics:
+    serviceMonitor:
+      enabled: false
+
+  # resource แบบประหยัดให้รันบน node ทั่วไปได้
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# schema job รันก่อน server ขึ้น ผ่าน Helm hooks (ค่า default อยู่แล้ว ระบุไว้ให้ชัด)
+schema:
+  useHelmHooks: true
+
+# Web UI (temporalio/ui) — Service: temporal-web:8080 (ClusterIP)
+# เข้าถึงผ่าน kubectl port-forward เท่านั้น (POC ไม่เปิด public)
+web:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 8080
+
+# admin CLI pod — ใช้ตรวจ namespace / schema
+admintools:
+  enabled: true

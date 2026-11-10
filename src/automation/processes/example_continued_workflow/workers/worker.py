@@ -10,7 +10,7 @@ import logging
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE
+from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, get_tls_config
 
 from ..activities.continued_activities import generate_items, process_item
 from ..configs.queues import EXAMPLE_CONTINUED_QUEUE, MAX_CONCURRENT_ACTIVITIES
@@ -20,7 +20,7 @@ from ..workflows.item import ExampleItemWorkflow
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
+    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE, tls=get_tls_config())
     worker = Worker(
         client,
         task_queue=EXAMPLE_CONTINUED_QUEUE,

@@ -1,0 +1,133 @@
+# ──────────────────────────────────────────────────────────────────
+# Overlay บน temporal-values.yaml — เพิ่ม multi-role + mTLS + Azure AD RBAC
+# (พอร์ตของ docker-compose-mtls.yaml มาขึ้น AKS)
+#
+# ใช้คู่กัน (ไฟล์หลังทับไฟล์หน้า):
+#   helm upgrade --install temporal temporal/temporal -n temporal \
+#     --version 1.7.0 \
+#     -f temporal-values.yaml \
+#     -f temporal-values.mtls.yaml \
+#     --timeout 15m
+#
+# หลักการสำคัญ: temporal-authz-server อ่าน config จาก ENV ล้วน
+# (config.Load(config.WithEmbedded)) → "ไม่อ่าน" config template ของ chart เลย
+# เราจึงยืม chart แค่ปั๊ม Deployment/Service/Job/UI แล้วฉีด config เข้าทาง:
+#   - Secret `temporal-server-env`  (DB/TLS/JWKS)      → additionalEnvSecretName
+#   - Secret `temporal-mtls-pki`    (ca/cluster/...)   → mount /pki
+#   - env TEMPORAL_BROADCAST_ADDRESS = pod IP
+# ค่า persistence/numHistoryShards ใน base file ใช้โดย "schema job" ของ chart เท่านั้น
+# (schema job คุย Postgres ตรง ๆ ไม่ผ่าน frontend จึงไม่ต้องใช้ mTLS)
+#
+# เตรียม secret ทั้งหมดด้วย make-secrets.sh ก่อน helm upgrade
+# ──────────────────────────────────────────────────────────────────
+
+server:
+  # image = authz binary + entrypoint ของเรา (ดู authz/)
+  image:
+    repository: acrtemporal25243.azurecr.io/temporal-authz-aks
+    tag: v1
+    pullPolicy: IfNotPresent
+
+  # เปิด internal-frontend → chart จะ set env USE_INTERNAL_FRONTEND=1 ให้ "ทุก" pod
+  # อัตโนมัติ ซึ่ง embedded template อ่านไป emit service internal-frontend และตัด
+  # publicClient ออก (ตรงกับ docker-compose-mtls.yaml: traffic ภายในไม่ผ่าน authorizer)
+  internal-frontend:
+    enabled: true
+
+  # env ลับ/คอนฟิก server ทั้งหมด (DB, TLS paths, JWKS, shards ...) สร้างจาก
+  # server-env.example → Secret temporal-server-env (ค่าจริงไม่ commit)
+  additionalEnvSecretName: temporal-server-env
+
+  # broadcast address ต้องเป็น pod IP ที่ peer เรียกถึงได้ (ไม่ใช่ service DNS)
+  additionalEnv:
+    - name: TEMPORAL_BROADCAST_ADDRESS
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+
+  # PKI mount อ่านอย่างเดียวที่ /pki ให้ตรงกับ path ใน server-env
+  # (TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem ฯลฯ)
+  additionalVolumes:
+    - name: pki
+      secret:
+        secretName: temporal-mtls-pki
+        defaultMode: 0444
+  additionalVolumeMounts:
+    - name: pki
+      mountPath: /pki
+      readOnly: true
+
+  config:
+    # ปิด namespace job ของ chart — โดย default มันคุย internal-frontend แบบไม่ตรง
+    # กับ mTLS ของเรา → ใช้ namespace-job.yaml (admin cert) สร้างแทน
+    namespaces:
+      create: false
+
+# admin-tools: ให้ `kubectl exec` เข้าไปสั่ง temporal CLI ผ่าน mTLS ด้วย admin cert
+# (CN=temporal-admin → claim mapper ให้สิทธิ์ cluster admin โดยไม่ต้องมี token)
+admintools:
+  enabled: true
+  image:
+    tag: 1.31.0
+  additionalVolumes:
+    - name: pki
+      secret:
+        secretName: temporal-mtls-pki
+        defaultMode: 0444
+  additionalVolumeMounts:
+    - name: pki
+      mountPath: /pki
+      readOnly: true
+  additionalEnv:
+    - name: TEMPORAL_ADDRESS
+      value: "temporal-frontend.temporal.svc:7233"
+    - name: TEMPORAL_CLI_ADDRESS
+      value: "temporal-frontend.temporal.svc:7233"
+    - name: TEMPORAL_TLS
+      value: "true"
+    - name: TEMPORAL_TLS_CLIENT_CERT_PATH
+      value: /pki/admin.pem
+    - name: TEMPORAL_TLS_CLIENT_KEY_PATH
+      value: /pki/admin-key.pem
+    - name: TEMPORAL_TLS_SERVER_CA_CERT_PATH
+      value: /pki/ca.pem
+    - name: TEMPORAL_TLS_SERVER_NAME
+      value: temporal-frontend
+
+# schema job ใช้ admin-tools รุ่นเดียวกับ server
+schema:
+  useHelmHooks: true
+
+# Web UI
+web:
+  image:
+    tag: 2.55.0
+  # UI → frontend ผ่าน mTLS: chart จะ mount secret นี้ + set TEMPORAL_TLS_* ให้เอง
+  # secret เป็นชนิด kubernetes.io/tls (tls.crt=client.pem, tls.key=client-key.pem,
+  # ca.crt=ca.pem) — สร้างโดย make-secrets.sh
+  tls:
+    enabled: true
+    secretName: temporal-ui-tls
+    serverName: temporal-frontend
+    enableHostVerification: true
+  # ค่าลับ OIDC (PROVIDER_URL/CLIENT_ID/CLIENT_SECRET) จาก Secret temporal-ui-env
+  additionalEnvSecretName: temporal-ui-env
+  additionalEnv:
+    - name: TEMPORAL_AUTH_ENABLED
+      value: "true"
+    - name: TEMPORAL_AUTH_TYPE
+      value: oidc
+    - name: TEMPORAL_AUTH_LABEL
+      value: "Azure AD"
+    # POC: เข้า UI ผ่าน `kubectl port-forward svc/temporal-web 8080:8080`
+    # → callback คง localhost:8080 ได้เลย ไม่ต้องแก้ redirect URI ใน Azure app
+    # ถ้าจะเปิด public (LoadBalancer/Ingress) ต้องแก้ค่านี้เป็น URL จริง + เพิ่ม
+    # redirect URI นั้นใน App registration
+    - name: TEMPORAL_AUTH_CALLBACK_URL
+      value: "http://localhost:8080/auth/sso/callback"
+    - name: TEMPORAL_AUTH_SCOPES
+      value: "openid,profile,email"
+    - name: TEMPORAL_AUTH_USE_ID_TOKEN_AS_BEARER
+      value: "true"
+    - name: TEMPORAL_CORS_ORIGINS
+      value: "http://localhost:3000"

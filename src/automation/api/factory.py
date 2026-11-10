@@ -26,6 +26,8 @@ from config.settings import temporal_ui_link
 from .client import get_client
 from .spec import SignalSpec, UpdateSpec, WorkflowSpec
 
+NS_QUERY = Query(default=None, description="Temporal namespace (default from env)")
+
 
 def _to_jsonable(value: Any) -> Any:
     """Convert dataclasses to dicts so FastAPI can serialize them."""
@@ -44,8 +46,8 @@ def _mount_signal(app: FastAPI, base: str, tag: str, name: str, sspec: SignalSpe
     description = sspec.description or f"Send '{name}' signal"
 
     if sspec.body_model is None:
-        async def send_signal(wid: str):
-            client = await get_client()
+        async def send_signal(wid: str, namespace: str | None = NS_QUERY):
+            client = await get_client(namespace)
             try:
                 await client.get_workflow_handle(wid).signal(sspec.fn)
             except Exception as e:
@@ -54,8 +56,8 @@ def _mount_signal(app: FastAPI, base: str, tag: str, name: str, sspec: SignalSpe
     else:
         body_model = sspec.body_model  # pin into closure
 
-        async def send_signal(wid: str, req: body_model):  # type: ignore[valid-type]
-            client = await get_client()
+        async def send_signal(wid: str, req: body_model, namespace: str | None = NS_QUERY):  # type: ignore[valid-type]
+            client = await get_client(namespace)
             arg = sspec.body_builder(req) if sspec.body_builder else req
             try:
                 await client.get_workflow_handle(wid).signal(sspec.fn, arg)
@@ -74,8 +76,8 @@ def _mount_update(app: FastAPI, base: str, tag: str, name: str, uspec: UpdateSpe
     description = uspec.description or f"Execute '{name}' update"
 
     if uspec.body_model is None:
-        async def send_update(wid: str):
-            client = await get_client()
+        async def send_update(wid: str, namespace: str | None = NS_QUERY):
+            client = await get_client(namespace)
             try:
                 result = await client.get_workflow_handle(wid).execute_update(uspec.fn)
             except Exception as e:
@@ -84,8 +86,8 @@ def _mount_update(app: FastAPI, base: str, tag: str, name: str, uspec: UpdateSpe
     else:
         body_model = uspec.body_model
 
-        async def send_update(wid: str, req: body_model):  # type: ignore[valid-type]
-            client = await get_client()
+        async def send_update(wid: str, req: body_model, namespace: str | None = NS_QUERY):  # type: ignore[valid-type]
+            client = await get_client(namespace)
             arg = uspec.body_builder(req) if uspec.body_builder else req
             try:
                 result = await client.get_workflow_handle(wid).execute_update(
@@ -106,8 +108,8 @@ def register_workflow_endpoints(app: FastAPI, spec: WorkflowSpec) -> None:
     base = f"/api/{spec.name}"
     start_body_model = spec.start_body_model
 
-    async def start(req: start_body_model):  # type: ignore[valid-type]
-        client = await get_client()
+    async def start(req: start_body_model, namespace: str | None = NS_QUERY):  # type: ignore[valid-type]
+        client = await get_client(namespace)
         workflow_id = f"{spec.id_prefix}-{uuid.uuid4().hex[:8]}"
         try:
             handle = await client.start_workflow(
@@ -128,8 +130,8 @@ def register_workflow_endpoints(app: FastAPI, spec: WorkflowSpec) -> None:
     start.__doc__ = f"Start a new {spec.display_name} workflow"
     app.post(f"{base}/start", tags=[tag], summary=f"Start {spec.display_name}")(start)
 
-    async def list_wf(limit: int = Query(default=20, ge=1, le=100)):
-        client = await get_client()
+    async def list_wf(limit: int = Query(default=20, ge=1, le=100), namespace: str | None = NS_QUERY):
+        client = await get_client(namespace)
         type_name = spec.workflow_class.__name__
         rows = []
         async for wf in client.list_workflows(
@@ -152,8 +154,8 @@ def register_workflow_endpoints(app: FastAPI, spec: WorkflowSpec) -> None:
     list_wf.__doc__ = f"List recent {spec.display_name} workflows"
     app.get(base, tags=[tag], summary=f"List {spec.display_name}")(list_wf)
 
-    async def describe_wf(wid: str):
-        client = await get_client()
+    async def describe_wf(wid: str, namespace: str | None = NS_QUERY):
+        client = await get_client(namespace)
         try:
             desc = await client.get_workflow_handle(wid).describe()
         except Exception as e:
@@ -177,8 +179,8 @@ def register_workflow_endpoints(app: FastAPI, spec: WorkflowSpec) -> None:
     if spec.queries:
         query_items = list(spec.queries.items())  # pin for closure
 
-        async def status(wid: str):
-            client = await get_client()
+        async def status(wid: str, namespace: str | None = NS_QUERY):
+            client = await get_client(namespace)
             handle = client.get_workflow_handle(wid)
             out: dict[str, Any] = {}
             for qname, qspec in query_items:
@@ -204,8 +206,8 @@ def register_workflow_endpoints(app: FastAPI, spec: WorkflowSpec) -> None:
     for update_name, uspec in spec.updates.items():
         _mount_update(app, base, tag, update_name, uspec)
 
-    async def cancel_wf(wid: str):
-        client = await get_client()
+    async def cancel_wf(wid: str, namespace: str | None = NS_QUERY):
+        client = await get_client(namespace)
         try:
             await client.get_workflow_handle(wid).cancel()
         except Exception as e:
@@ -216,8 +218,8 @@ def register_workflow_endpoints(app: FastAPI, spec: WorkflowSpec) -> None:
     cancel_wf.__doc__ = "Request graceful cancellation (workflow runs cleanup)"
     app.post(f"{base}/{{wid}}/cancel", tags=[tag], summary="Cancel")(cancel_wf)
 
-    async def terminate_wf(wid: str, reason: str = ""):
-        client = await get_client()
+    async def terminate_wf(wid: str, reason: str = "", namespace: str | None = NS_QUERY):
+        client = await get_client(namespace)
         try:
             await client.get_workflow_handle(wid).terminate(
                 reason or "Terminated via custom UI"

@@ -11,7 +11,7 @@ import asyncio
 
 from temporalio.client import Client
 
-from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE
+from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, get_tls_config
 
 from ..workflows.parent import ControllableBatchParentWorkflow
 
@@ -25,7 +25,7 @@ async def main() -> None:
     parser.add_argument("workflow_id")
     args = parser.parse_args()
 
-    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
+    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE, tls=get_tls_config())
     handle = client.get_workflow_handle(args.workflow_id)
 
     if args.command == "pause":

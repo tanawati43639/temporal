@@ -13,7 +13,7 @@ import uuid
 
 from temporalio.client import Client
 
-from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, temporal_ui_link
+from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, get_tls_config, temporal_ui_link
 
 from ..configs.queues import BATCH_QUEUE
 from ..models.batch import ParentInput
@@ -33,7 +33,7 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
+    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE, tls=get_tls_config())
 
     workflow_id = f"ctl-batch-{uuid.uuid4().hex[:8]}"
     handle = await client.start_workflow(

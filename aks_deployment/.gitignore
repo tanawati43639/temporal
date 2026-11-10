@@ -1,0 +1,4 @@
+# ค่าลับที่เติมเองตอน deploy mTLS — ห้าม commit (.example คือ template ที่ commit ได้)
+server-env
+ui-env
+*.pem

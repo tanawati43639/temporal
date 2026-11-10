@@ -14,7 +14,7 @@ import logging
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE
+from config.settings import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, get_tls_config
 
 from ..activities.batch_activities import PIPELINE
 from ..configs.queues import BATCH_QUEUE, MAX_CONCURRENT_ACTIVITIES
@@ -24,7 +24,7 @@ from ..workflows.process_batch import ProcessBatchWorkflow
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
+    client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE, tls=get_tls_config())
     worker = Worker(
         client,
         task_queue=BATCH_QUEUE,

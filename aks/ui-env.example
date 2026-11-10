@@ -1,0 +1,17 @@
+# ──────────────────────────────────────────────────────────────────
+# ค่าลับ Azure AD OIDC สำหรับ Temporal UI → Secret `temporal-ui-env`
+# คัดลอกเป็น aks/ui-env แล้วเติมค่า (ห้าม commit aks/ui-env)
+# ค่าชุดนี้ตรงกับ .env.local ของ docker-compose-mtls.yaml
+#
+#   kubectl -n temporal create secret generic temporal-ui-env \
+#     --from-env-file=aks/ui-env
+# ──────────────────────────────────────────────────────────────────
+
+# App registration -> Overview -> Directory (tenant) ID ประกอบใน URL
+TEMPORAL_AUTH_PROVIDER_URL=__FILL_ME__
+
+# App registration -> Overview -> Application (client) ID
+TEMPORAL_AUTH_CLIENT_ID=__FILL_ME__
+
+# App registration -> Certificates & secrets -> client secret (ค่า "Value")
+TEMPORAL_AUTH_CLIENT_SECRET=__FILL_ME__

@@ -1,0 +1,54 @@
+# ──────────────────────────────────────────────────────────────────
+# env สำหรับ pod ของ Temporal server (authz binary) ทั้ง 5 role
+# → Secret `temporal-server-env` (server.additionalEnvSecretName)
+#
+# คัดลอกเป็น aks/server-env แล้วเติมค่า __FILL_ME__ (ห้าม commit aks/server-env)
+# สร้าง secret ด้วย aks/make-secrets.sh (หรือ:
+#   kubectl -n temporal create secret generic temporal-server-env \
+#     --from-env-file=aks/server-env )
+#
+# ชื่อตัวแปรอ้างอิงจาก embedded config template ของ temporal-server v1.31
+# (go.temporal.io/server/common/config/config_template_embedded.yaml)
+# ──────────────────────────────────────────────────────────────────
+
+# ---- persistence: Postgres in-cluster (ทั้ง default + visibility = SQL, ไม่มี ES) ----
+DB=postgres12
+DB_PORT=5432
+POSTGRES_SEEDS=temporal-postgres.temporal.svc.cluster.local
+POSTGRES_USER=postgres
+POSTGRES_PWD=__FILL_ME__
+DBNAME=temporal
+VISIBILITY_DBNAME=temporal_visibility
+
+# ต้องตรงกับ server.config.persistence.numHistoryShards ใน aks/temporal-values.yaml
+# (เปลี่ยนไม่ได้หลัง deploy ครั้งแรก)
+NUM_HISTORY_SHARDS=512
+
+# metrics ให้ chart scrape ที่ containerPort 9090
+PROMETHEUS_ENDPOINT=0.0.0.0:9090
+
+# membership: bind ทุก interface; broadcast = pod IP (ตั้งแยกใน values ผ่าน status.podIP)
+BIND_ON_IP=0.0.0.0
+
+# dynamic config ที่ chart mount ให้ (ถ้าไม่มีไฟล์ จะใช้ค่า default ภายใน ก็ยังรันได้)
+DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamic_config/dynamic_config.yaml
+
+# ---- internode + frontend mTLS (path ชี้ไป secret temporal-mtls-pki ที่ /pki) ----
+TEMPORAL_TLS_SERVER_CERT=/pki/cluster.pem
+TEMPORAL_TLS_SERVER_KEY=/pki/cluster-key.pem
+TEMPORAL_TLS_SERVER_CA_CERT=/pki/ca.pem
+TEMPORAL_TLS_REQUIRE_CLIENT_AUTH=true
+TEMPORAL_TLS_INTERNODE_SERVER_NAME=temporal-cluster
+TEMPORAL_TLS_FRONTEND_CERT=/pki/frontend.pem
+TEMPORAL_TLS_FRONTEND_KEY=/pki/frontend-key.pem
+TEMPORAL_TLS_CLIENT1_CA_CERT=/pki/ca.pem
+TEMPORAL_TLS_FRONTEND_SERVER_NAME=temporal-frontend
+
+# ---- Azure AD JWT verification (ใช้จริงที่ frontend; ตั้งเหมือนกันทุก pod ได้) ----
+# JWKS URI ของ tenant (เหมือน TEMPORAL_JWT_KEY_SOURCE1 ใน compose .env.jwks)
+TEMPORAL_JWT_KEY_SOURCE1=__FILL_ME__
+TEMPORAL_JWT_PERMISSIONS_CLAIM=roles
+TEMPORAL_JWT_KEY_REFRESH=1h
+
+# หมายเหตุ: ห้ามตั้ง TEMPORAL_AUTH_AUTHORIZER / TEMPORAL_AUTH_CLAIM_MAPPER
+# (authz binary ฝัง Azure authorizer/claim mapper ใน code แล้ว — ตั้งค่าอื่นจะพัง)
