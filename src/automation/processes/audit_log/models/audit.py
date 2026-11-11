@@ -22,6 +22,14 @@ class AuditEntry:
     event_type: str
     identity: str
     timestamp: str
+    status: str = ""
+    task_queue: str = ""
+    start_time: str = ""
+    close_time: str = ""
+    execution_duration_ms: int = 0
+    parent_workflow_id: str = ""
+    memo: dict[str, str] = field(default_factory=dict)
+    search_attributes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

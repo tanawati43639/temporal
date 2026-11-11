@@ -20,7 +20,7 @@ from ..workflows.audit_log import AuditLogWorkflow
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Start an audit-log workflow")
-    parser.add_argument("--days", type=int, required=True, help="Lookback days")
+    parser.add_argument("--days", type=int, required=True, help="Lookback days (0 = all time)")
     parser.add_argument("--ns", action="append", help="Namespace(s) to scan (repeatable)")
     parser.add_argument("--wait-result", action="store_true", help="Block until done")
     args = parser.parse_args()
@@ -46,7 +46,13 @@ async def main() -> None:
         result = await handle.result()
         print(f"\nAudit complete — {result.total_entries} entries across {result.namespaces_scanned}")
         for entry in result.entries:
-            print(f"  [{entry.namespace}] {entry.event_type:20s} {entry.identity:30s} {entry.workflow_id}")
+            dur = f"{entry.execution_duration_ms}ms" if entry.execution_duration_ms else "running"
+            parent = f" parent={entry.parent_workflow_id}" if entry.parent_workflow_id else ""
+            print(
+                f"  [{entry.namespace}] {entry.event_type:20s} {entry.status:12s} "
+                f"{entry.identity:30s} {entry.workflow_id}  "
+                f"queue={entry.task_queue}  dur={dur}{parent}"
+            )
 
 
 if __name__ == "__main__":

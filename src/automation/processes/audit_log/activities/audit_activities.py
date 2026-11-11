@@ -2,14 +2,26 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import json
+
 from temporalio import activity
 from temporalio.api.enums.v1 import EventType
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionStatus
 
 from config.settings import TEMPORAL_ADDRESS, get_tls_config
 
 from ..configs.queues import MAX_WORKFLOWS_PER_NAMESPACE
 from ..models.audit import AuditEntry, ScanNamespaceInput
+
+_STATUS_NAMES: dict[int, str] = {
+    WorkflowExecutionStatus.RUNNING: "running",
+    WorkflowExecutionStatus.COMPLETED: "completed",
+    WorkflowExecutionStatus.FAILED: "failed",
+    WorkflowExecutionStatus.CANCELED: "canceled",
+    WorkflowExecutionStatus.TERMINATED: "terminated",
+    WorkflowExecutionStatus.CONTINUED_AS_NEW: "continued_as_new",
+    WorkflowExecutionStatus.TIMED_OUT: "timed_out",
+}
 
 _IDENTITY_EVENTS: dict[int, str] = {
     EventType.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED: "started",
@@ -40,8 +52,11 @@ async def scan_namespace_audit(input: ScanNamespaceInput) -> list[AuditEntry]:
     client = await Client.connect(
         TEMPORAL_ADDRESS, namespace=input.namespace, tls=get_tls_config()
     )
-    cutoff = datetime.now(timezone.utc) - timedelta(days=input.lookback_days)
-    query = f"StartTime > '{cutoff.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+    if input.lookback_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=input.lookback_days)
+        query = f"StartTime > '{cutoff.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+    else:
+        query = ""
 
     entries: list[AuditEntry] = []
     scanned = 0
@@ -49,6 +64,15 @@ async def scan_namespace_audit(input: ScanNamespaceInput) -> list[AuditEntry]:
     async for wf_exec in client.list_workflows(query=query):
         if scanned >= MAX_WORKFLOWS_PER_NAMESPACE:
             break
+
+        status = _STATUS_NAMES.get(wf_exec.status, str(wf_exec.status))
+        start_iso = wf_exec.start_time.isoformat() if wf_exec.start_time else ""
+        close_iso = wf_exec.close_time.isoformat() if wf_exec.close_time else ""
+        duration_ms = 0
+        if wf_exec.start_time and wf_exec.close_time:
+            duration_ms = int((wf_exec.close_time - wf_exec.start_time).total_seconds() * 1000)
+        parent_wf_id = wf_exec.parent_id or ""
+        sa = {k: json.dumps(v) for k, v in (wf_exec.search_attributes or {}).items()}
 
         handle = client.get_workflow_handle(wf_exec.id, run_id=wf_exec.run_id)
         try:
@@ -65,9 +89,16 @@ async def scan_namespace_audit(input: ScanNamespaceInput) -> list[AuditEntry]:
                         namespace=input.namespace,
                         event_type=label,
                         identity=identity or "",
-                        timestamp=event.event_time.isoformat()
+                        timestamp=event.event_time.ToDatetime().isoformat()
                         if event.event_time
                         else "",
+                        status=status,
+                        task_queue=wf_exec.task_queue or "",
+                        start_time=start_iso,
+                        close_time=close_iso,
+                        execution_duration_ms=duration_ms,
+                        parent_workflow_id=parent_wf_id,
+                        search_attributes=sa,
                     )
                 )
         except Exception as exc:
