@@ -28,6 +28,8 @@ _IDENTITY_EVENTS: dict[int, str] = {
     EventType.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED: "signaled",
     EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED: "terminated",
     EventType.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED: "cancel_requested",
+    EventType.EVENT_TYPE_WORKFLOW_EXECUTION_PAUSED: "paused",
+    EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UNPAUSED: "unpaused",
 }
 
 
@@ -41,8 +43,11 @@ def _extract_identity(event) -> str | None:
     if et == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED:
         return event.workflow_execution_terminated_event_attributes.identity
     if et == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED:
-        attrs = event.request_cancel_external_workflow_execution_initiated_event_attributes
-        return getattr(attrs, "identity", None) if attrs else None
+        return event.workflow_execution_cancel_requested_event_attributes.identity
+    if et == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_PAUSED:
+        return event.workflow_execution_paused_event_attributes.identity
+    if et == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UNPAUSED:
+        return event.workflow_execution_unpaused_event_attributes.identity
     return None
 
 
@@ -72,7 +77,7 @@ async def scan_namespace_audit(input: ScanNamespaceInput) -> list[AuditEntry]:
         if wf_exec.start_time and wf_exec.close_time:
             duration_ms = int((wf_exec.close_time - wf_exec.start_time).total_seconds() * 1000)
         parent_wf_id = wf_exec.parent_id or ""
-        sa = {k: json.dumps(v) for k, v in (wf_exec.search_attributes or {}).items()}
+        sa = {k: json.dumps(v, default=str) for k, v in (wf_exec.search_attributes or {}).items()}
 
         handle = client.get_workflow_handle(wf_exec.id, run_id=wf_exec.run_id)
         try:

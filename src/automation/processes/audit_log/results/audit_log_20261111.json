@@ -1,6 +1,87 @@
 {
   "entries": [
     {
+      "close_time": "",
+      "event_type": "started",
+      "execution_duration_ms": 0,
+      "identity": "temporal-scheduler-dev-export_audit_log_daily",
+      "memo": {},
+      "namespace": "dev",
+      "parent_workflow_id": "",
+      "run_id": "01a1ca00-744b-7abb-aa7e-997e2d59b2a0",
+      "search_attributes": {
+        "TemporalScheduledById": "[\"export_audit_log_daily\"]",
+        "TemporalScheduledStartTime": "[\"2026-11-11 09:46:29+00:00\"]"
+      },
+      "start_time": "2026-11-11T09:46:29.835704+00:00",
+      "status": "running",
+      "task_queue": "audit-log-task-queue",
+      "timestamp": "2026-11-11T09:46:29.835704",
+      "workflow_id": "-2026-11-11T09:46:29Z",
+      "workflow_type": "AuditLogWorkflow"
+    },
+    {
+      "close_time": "2026-11-11T09:45:26.887537+00:00",
+      "event_type": "started",
+      "execution_duration_ms": 277270,
+      "identity": "temporal-scheduler-dev-export_audit_log_daily",
+      "memo": {},
+      "namespace": "dev",
+      "parent_workflow_id": "",
+      "run_id": "01a1c9fb-4351-760e-a4ae-e43a0d25dcca",
+      "search_attributes": {
+        "BuildIds": "[\"unversioned\", \"unversioned:727cefcaf214e8fdc3174cea8d25fd3b\"]",
+        "TemporalScheduledById": "[\"export_audit_log_daily\"]",
+        "TemporalScheduledStartTime": "[\"2026-11-11 09:40:49+00:00\"]"
+      },
+      "start_time": "2026-11-11T09:40:49.617398+00:00",
+      "status": "terminated",
+      "task_queue": "audit-log-task-queue",
+      "timestamp": "2026-11-11T09:40:49.617398",
+      "workflow_id": "-2026-11-11T09:40:49Z",
+      "workflow_type": "AuditLogWorkflow"
+    },
+    {
+      "close_time": "2026-11-11T09:45:26.887537+00:00",
+      "event_type": "terminated",
+      "execution_duration_ms": 277270,
+      "identity": "ttriyotee@outlook.com",
+      "memo": {},
+      "namespace": "dev",
+      "parent_workflow_id": "",
+      "run_id": "01a1c9fb-4351-760e-a4ae-e43a0d25dcca",
+      "search_attributes": {
+        "BuildIds": "[\"unversioned\", \"unversioned:727cefcaf214e8fdc3174cea8d25fd3b\"]",
+        "TemporalScheduledById": "[\"export_audit_log_daily\"]",
+        "TemporalScheduledStartTime": "[\"2026-11-11 09:40:49+00:00\"]"
+      },
+      "start_time": "2026-11-11T09:40:49.617398+00:00",
+      "status": "terminated",
+      "task_queue": "audit-log-task-queue",
+      "timestamp": "2026-11-11T09:45:26.887537",
+      "workflow_id": "-2026-11-11T09:40:49Z",
+      "workflow_type": "AuditLogWorkflow"
+    },
+    {
+      "close_time": "2026-11-11T09:18:30.652240+00:00",
+      "event_type": "started",
+      "execution_duration_ms": 249,
+      "identity": "ttriyotee@outlook.com",
+      "memo": {},
+      "namespace": "dev",
+      "parent_workflow_id": "",
+      "run_id": "01a1c9e6-d403-7087-abbc-8c7505056c9e",
+      "search_attributes": {
+        "BuildIds": "[\"unversioned\", \"unversioned:727cefcaf214e8fdc3174cea8d25fd3b\"]"
+      },
+      "start_time": "2026-11-11T09:18:30.403049+00:00",
+      "status": "completed",
+      "task_queue": "audit-log-task-queue",
+      "timestamp": "2026-11-11T09:18:30.403049",
+      "workflow_id": "9c2ca112-d386-415c-93b4-c5abf2370db7",
+      "workflow_type": "AuditLogWorkflow"
+    },
+    {
       "close_time": "2026-11-11T09:17:34.878602+00:00",
       "event_type": "started",
       "execution_duration_ms": 246,
@@ -80,7 +161,7 @@
       "close_time": "2026-11-11T09:11:11.488281+00:00",
       "event_type": "cancel_requested",
       "execution_duration_ms": 17138,
-      "identity": "",
+      "identity": "ttriyotee@outlook.com",
       "memo": {},
       "namespace": "dev",
       "parent_workflow_id": "",
@@ -441,7 +522,7 @@
       "close_time": "2026-11-11T09:01:11.943407+00:00",
       "event_type": "cancel_requested",
       "execution_duration_ms": 42877,
-      "identity": "",
+      "identity": "ttriyotee@outlook.com",
       "memo": {},
       "namespace": "dev",
       "parent_workflow_id": "",
@@ -536,5 +617,5 @@
   "namespaces_scanned": [
     "dev"
   ],
-  "total_entries": 28
+  "total_entries": 32
 }
